@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Council Deliberation UI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <header class="topbar">
+        <div class="topbar__left">LIVE FEED</div>
+        <div class="topic-pill">
+          <span class="dot"></span>
+          <span id="topic-text">Current Topic: Awaiting live update</span>
+        </div>
+        <div class="topbar__right">
+          COUNCIL DELIBERATION
+          <span class="live-badge">Live</span>
+          <div class="status-strip" aria-live="polite">
+            <span class="status-item" id="status-connection">offline</span>
+            <span class="status-item" id="status-provider">news: n/a</span>
+            <span class="status-item" id="status-model">model: n/a</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel feed" id="feed-list">
+          <div class="feed-controls">
+            <input
+              class="feed-input"
+              id="topic-input"
+              type="text"
+              placeholder="Type a debate topic..."
+              aria-label="Debate topic"
+            />
+            <button class="feed-btn" id="fetch-next" type="button">Fetch next</button>
+          </div>
+          <div class="feed-card active" id="active-feed-card">
+            <div class="feed-card__header">
+              <span class="badge">Active</span>
+            </div>
+            <h3>Waiting for live news...</h3>
+            <p>System &bull; now</p>
+          </div>
+        </section>
+
+        <section class="panel map">
+          <div class="map-grid"></div>
+          <div id="india-map" class="map-canvas" aria-label="India state map"></div>
+          <div class="map-dots"></div>
+        </section>
+
+        <section class="panel deliberation" id="deliberation-list">
+          <div class="agent-card muted">
+            <div class="agent-avatar"></div>
+            <div>
+              <div class="agent-name">Council booting...</div>
+              <div class="agent-speech">Waiting for live debate signal.</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

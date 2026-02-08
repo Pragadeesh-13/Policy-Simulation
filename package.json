@@ -1,0 +1,8 @@
+{
+  "name": "llm-council",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
