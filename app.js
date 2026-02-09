@@ -227,6 +227,11 @@ const STATE_AVATAR_STYLES = {
   Kerala: { initials: "KL", background: "#6ee7b7" },
   Assam: { initials: "AS", background: "#fca5a5" },
   Punjab: { initials: "PB", background: "#c4b5fd" },
+  Karnataka: { initials: "KA", background: "#93c5fd" },
+  Maharashtra: { initials: "MH", background: "#fda4af" },
+  "Uttar Pradesh": { initials: "UP", background: "#fdba74" },
+  "West Bengal": { initials: "WB", background: "#a5b4fc" },
+  Gujarat: { initials: "GJ", background: "#fca5a5" },
 };
 
 const STATE_TEAMS = {
@@ -235,6 +240,11 @@ const STATE_TEAMS = {
   Punjab: "aap",
   Kerala: "cpim",
   Assam: "bjp",
+  Karnataka: "congress",
+  Maharashtra: "bjp",
+  "Uttar Pradesh": "bjp",
+  "West Bengal": "tmc",
+  Gujarat: "bjp",
 };
 
 const getStateTeam = (stateName) => STATE_TEAMS[stateName] || "independent";
@@ -587,9 +597,9 @@ const upsertAgentStreamMessage = (payload) => {
   const speechList = card.querySelector(".agent-speech-list");
   const nameEl = card.querySelector(".agent-name");
   const avatarEl = card.querySelector(".agent-avatar");
-  const roundIndex = typeof payload.round === "number" ? payload.round + 1 : null;
-  const roundLabel = roundIndex ? `Round ${roundIndex}: ` : "";
-  const streamKey = `${name}:${payload.round ?? ""}`;
+  const label = payload.label || "";
+  const roundLabel = label ? `${label}: ` : "";
+  const streamKey = `${name}:${payload.round ?? ""}:${label}`;
   const hasMessage = Boolean(payload.message && payload.message.trim());
 
   if (speechList && hasMessage) {
@@ -598,6 +608,9 @@ const upsertAgentStreamMessage = (payload) => {
     if (!entry) {
       entry = document.createElement("div");
       entry.className = "agent-speech";
+      if (label) {
+        entry.classList.add(`speech-${label.toLowerCase().replace(/\s+/g, "-")}`);
+      }
       speechList.appendChild(entry);
       agentStreamEntries.set(streamKey, entry);
     }
@@ -638,10 +651,13 @@ const upsertAgentMessage = (payload) => {
     const nameEl = card.querySelector(".agent-name");
     const avatarEl = card.querySelector(".agent-avatar");
     if (speechList) {
-      const roundIndex = typeof payload.round === "number" ? payload.round + 1 : null;
-      const roundLabel = roundIndex ? `Round ${roundIndex}: ` : "";
+      const label = payload.label || "";
+      const roundLabel = label ? `${label}: ` : "";
       const entry = document.createElement("div");
       entry.className = "agent-speech";
+      if (label) {
+        entry.classList.add(`speech-${label.toLowerCase().replace(/\s+/g, "-")}`);
+      }
       entry.textContent = `${roundLabel}${payload.message || ""}`;
       speechList.appendChild(entry);
     }
@@ -766,6 +782,71 @@ const connectLiveStream = () => {
     const data = JSON.parse(event.data);
     if (data.message) {
       addSystemNote(data.message);
+    }
+  });
+
+  stream.addEventListener("round_start", (event) => {
+    const data = JSON.parse(event.data);
+    const label = data.label || `Round ${data.round}`;
+    const count = data.count || "?";
+    const order = data.order ? data.order.join(" → ") : "";
+    const message = order
+      ? `── ${label} (${count} speakers) ──\nOrder: ${order}`
+      : `── ${label} (${count} speakers) ──`;
+    addSystemNote(message);
+  });
+
+  stream.addEventListener("panel_selected", (event) => {
+    const data = JSON.parse(event.data);
+    // Grey out benched states on the map
+    if (data.benched) {
+      data.benched.forEach((stateName) => {
+        const normalized = normalizeStateName(stateName);
+        const targets = getStateLayers(normalized);
+        targets.forEach((layer) => {
+          layer.setStyle({
+            className: "state-path",
+            fillColor: "#090909",
+            fillOpacity: 0.12,
+            color: "rgba(255, 255, 255, 0.06)",
+            weight: 0.8,
+          });
+        });
+      });
+    }
+    // Highlight selected states
+    if (data.selected) {
+      data.selected.forEach((stateName) => {
+        const normalized = normalizeStateName(stateName);
+        const targets = getStateLayers(normalized);
+        targets.forEach((layer) => {
+          layer.setStyle(activeStateStyle);
+        });
+      });
+    }
+    // Dim benched agent cards
+    if (data.benched) {
+      data.benched.forEach((stateName) => {
+        agentCards.forEach((card, name) => {
+          if (name.includes(stateName)) {
+            card.classList.add("benched");
+          }
+        });
+      });
+    }
+  });
+
+  stream.addEventListener("rebuttal_selected", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.rebuttal_panel) {
+      addSystemNote(`Rebuttal panel: ${data.rebuttal_panel.join(", ")}`);
+    }
+  });
+
+  stream.addEventListener("reply_selected", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.reply_state) {
+      addSystemNote(`Right of Reply granted to: ${data.reply_state}`);
     }
   });
 

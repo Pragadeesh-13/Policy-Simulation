@@ -6,12 +6,16 @@ const PORT = Number(process.env.PORT || 3000);
 const NEWS_PROVIDER = "newsapi";
 const NEWS_API_KEY = process.env.NEWS_API_KEY || "b883c299ae464705b215df75a65147c1";
 const NEWS_QUERY = process.env.NEWS_QUERY || "";
-const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://localhost:1234";
+const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://127.0.0.1:1234";
 const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY || "";
-const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-14b";
+const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-8b";
 const LMSTUDIO_STREAM = process.env.LMSTUDIO_STREAM !== "false";
-const COUNCIL_ROUNDS = Math.max(1, Number(process.env.COUNCIL_ROUNDS || 2));
-const COUNCIL_STATES = (process.env.COUNCIL_STATES || "Tamil Nadu,Delhi,Kerala,Assam,Punjab")
+const PANEL_SIZE = Math.max(2, Number(process.env.PANEL_SIZE || 5));
+const REBUTTAL_SIZE = Math.max(2, Number(process.env.REBUTTAL_SIZE || 3));
+const COUNCIL_STATES = (
+  process.env.COUNCIL_STATES ||
+  "Tamil Nadu,Delhi,Kerala,Assam,Punjab,Karnataka,Maharashtra,Uttar Pradesh,West Bengal,Gujarat"
+)
   .split(",")
   .map((state) => state.trim())
   .filter(Boolean);
@@ -46,6 +50,36 @@ const STATE_PROFILES = {
     ideology: "Hindu nationalist, pro-development, border security",
     focus: "Infrastructure, tea/oil industry, immigration control",
     stance: "Border Sentinel. Strongly support Central Government initiatives. Frame growth through the lens of National Security and Integration."
+  },
+  "Karnataka": {
+    party: "Congress",
+    ideology: "Centrist, welfare + tech balance",
+    focus: "IT/tech industry, startups, agriculture",
+    stance: "Tech Pragmatist. Support tech growth but demand rural balance. Counter BJP states on federalism issues."
+  },
+  "Maharashtra": {
+    party: "BJP-Shiv Sena alliance",
+    ideology: "Pro-business, Marathi pride, infrastructure-focused",
+    focus: "Finance, Bollywood, manufacturing, ports",
+    stance: "Economic Powerhouse. Frame every debate around Maharashtra's GDP contribution. Demand proportional central funding."
+  },
+  "Uttar Pradesh": {
+    party: "BJP",
+    ideology: "Hindu nationalist, populist development",
+    focus: "Agriculture, MSME, infrastructure, defense corridors",
+    stance: "Population Giant. Demand resources proportional to population. Support Centre aggressively. Rival Tamil Nadu and Maharashtra on industrial investment."
+  },
+  "West Bengal": {
+    party: "TMC",
+    ideology: "Regional populist, anti-BJP, welfare-focused",
+    focus: "Agriculture, jute, tea, SMEs, cultural economy",
+    stance: "Opposition Firebrand. Oppose every Central Government policy on principle. Demand special status and higher federal allocation."
+  },
+  "Gujarat": {
+    party: "BJP",
+    ideology: "Pro-business, free market, infrastructure-driven",
+    focus: "Petrochemicals, textiles, ports, renewable energy",
+    stance: "Centre's Model State. Defend all central policies. Showcase Gujarat as proof that the ruling party's model works."
   }
 };
 
@@ -210,8 +244,26 @@ const parseJson = (text) => {
   try {
     return JSON.parse(text);
   } catch (error) {
+    // Try to extract JSON from surrounding text
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
+};
+
+const shuffle = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 };
 
 const normalizeLmBase = (value) => value.replace(/\/v1\/?$/i, "");
@@ -308,85 +360,62 @@ const sanitizeModelOutput = (text) => {
   if (!text) {
     return "";
   }
-  const lines = text.split("\n");
-  while (lines.length && /^\s*(okay|sure|first|let me|i need to)/i.test(lines[0])) {
+  // Strip hidden <thought> blocks
+  let clean = text.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+  // Strip markdown code fences
+  clean = clean.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+  const lines = clean.split("\n");
+  while (lines.length && /^\s*(okay|sure|first|let me|i need to|here is)/i.test(lines[0])) {
     lines.shift();
   }
   return lines.join("\n").trim();
 };
 
-const buildAgentPrompts = (agent, story, transcript, round) => {
-  const profile = `Ruling party: ${agent.party}. Ideology: ${agent.ideology}. Economic focus: ${agent.focus}.`;
+/* ─── Streaming with Thought Buffering ──────────────────── */
 
-  const allies = Object.keys(STATE_PROFILES)
-    .filter((state) => STATE_PROFILES[state].party === agent.party && state !== agent.state);
-
-  const allianceContext = allies.length
-    ? `Allied States in Council: ${allies.join(", ")}. Coordinate your arguments with them.`
-    : "You have no direct party allies in this session. Stand your ground independently.";
-
-  let systemPrompt;
-  let userPrompt;
-
-  if (round === 0) {
-    systemPrompt =
-      `You are the ${agent.state} Council representative. ${profile} ${allianceContext} Your stance: ${agent.stance}. ` +
-      "Respond with ONLY your final position. No preamble. 2-3 sentences max.";
-
-    userPrompt =
-      `Story: ${story.title}\n${story.description || "No summary."}\n\n` +
-      `Analyze impact on ${agent.state}. Be specific about industries.`;
-  } else {
-    const priorRound = transcript.filter((t) => t.round === 0);
-    const context = priorRound.length
-      ? `Round 1 positions:\n${priorRound.map((t) => `- ${t.state}: ${t.message}`).join("\n")}\n\n`
-      : "";
-
-    systemPrompt =
-      `You are the ${agent.state} Council representative. ${profile} Stance: ${agent.stance}. ` +
-      `STRATEGY: ${allianceContext} Support allies if their interests match yours. ` +
-      "Challenge states that threaten your state's economy. Use data-driven rebuttals. No preamble. 2-3 sentences.";
-
-    userPrompt =
-      `${context}Story: ${story.title}\n\n` +
-      `Review Round 1. Identify one specific state whose position harms ${agent.state}. ` +
-      `Call out that state by name and dismantle their logic. If ${allies.join("/")} were attacked, defend them.`;
-  }
-
-  return {
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    maxTokens: round === 0 ? 200 : 250,
-  };
-};
-
-const getAgentMessage = async (agent, story, transcript, round) => {
-  const { messages, maxTokens } = buildAgentPrompts(agent, story, transcript, round);
-
-  try {
-    const response = await callLmStudio(messages, maxTokens);
-    return sanitizeModelOutput(response) || "Awaiting response from the council node.";
-  } catch (error) {
-    console.error("Agent generation failed:", error.message);
-    return "Signal lost. Unable to reach local model.";
-  }
-};
-
-const streamAgentMessage = async (agent, story, transcript, round) => {
-  const { messages, maxTokens } = buildAgentPrompts(agent, story, transcript, round);
-  const payloadBase = { agent: agent.name, state: agent.state, round };
+const streamAgentMessage = async (agent, messages, maxTokens, round, label) => {
+  const payloadBase = { agent: agent.name, state: agent.state, round, label };
   sendEvent("agent_start", payloadBase);
 
   let fullText = "";
+  let thoughtClosed = false;
+  let noThoughtDetected = false;
+  let publicBuffer = "";
+
   try {
     await callLmStudioStream(messages, maxTokens, (delta) => {
       fullText += delta;
-      sendEvent("agent_delta", { ...payloadBase, message: fullText });
+
+      // If we're past 60 chars and no <thought> tag seen, stream everything
+      if (!thoughtClosed && !noThoughtDetected && fullText.length > 60 && !fullText.includes("<thought>")) {
+        noThoughtDetected = true;
+      }
+
+      if (noThoughtDetected) {
+        sendEvent("agent_delta", { ...payloadBase, message: fullText.trim() });
+        return;
+      }
+
+      // Buffer tokens until <thought> block is fully closed
+      if (!thoughtClosed) {
+        if (fullText.includes("</thought>")) {
+          thoughtClosed = true;
+          const afterThought = fullText.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+          publicBuffer = afterThought;
+          if (publicBuffer) {
+            sendEvent("agent_delta", { ...payloadBase, message: publicBuffer });
+          }
+        }
+        // Don't emit anything while inside <thought>
+        return;
+      }
+
+      // After thought is closed, stream normally
+      publicBuffer = fullText.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+      sendEvent("agent_delta", { ...payloadBase, message: publicBuffer });
     });
   } catch (error) {
-    console.error("Agent streaming failed:", error.message);
+    console.error(`[STREAM] Agent failed (${agent.state}):`, error.message);
     const fallback = "Signal lost. Unable to reach local model.";
     sendEvent("agent_end", { ...payloadBase, message: fallback });
     return fallback;
@@ -397,133 +426,500 @@ const streamAgentMessage = async (agent, story, transcript, round) => {
   return cleaned;
 };
 
-const getCouncilSummary = async (story, transcript) => {
-  const systemPrompt =
-    "You are a Strategic Systems Analyst. Your role is to objectively synthesize the council's intelligence. " +
-  "Respond with ONLY the final summary. No preamble. No parliamentary jargon or honorifics. " +
-  "Before writing, internally execute these steps: \n" +
-  "1. CLASSIFY: Group states into STRATEGIC ALIGNMENT (Pro) or STRATEGIC FRICTION (Anti). \n" +
-  "2. IDENTIFY: Pinpoint the exact economic variable causing the friction (e.g., MSP, Tech Tax, Federal Dues). \n" +
-  "3. OUTPUT: Exactly 2 sentences. \n" +
-  "Sentence 1: State the primary objective or data point that all agents addressed. \n" +
-  "Sentence 2: Contrast the two most opposing state viewpoints using a direct 'While [State A] argues X, [State B] counters with Y' structure.";
-  const userPrompt =
-    `Story: ${story.title}\n` +
-    `Debate transcript:\n${buildTranscriptText(transcript)}\n\n` +
-    "Summarize the council's debate.";
-  const messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt },
-  ];
-
+const getAgentMessage = async (agent, messages, maxTokens, round, label) => {
+  const payloadBase = { agent: agent.name, state: agent.state, round, label };
   try {
-    const response = await callLmStudio(messages, 200);
-    return sanitizeModelOutput(response);
+    const response = await callLmStudio(messages, maxTokens);
+    const cleaned = sanitizeModelOutput(response) || "Awaiting response from the council node.";
+    sendEvent("agent", { ...payloadBase, message: cleaned });
+    return cleaned;
   } catch (error) {
-    console.error("Summary generation failed:", error.message);
-    return "Council reached no clear consensus. Monitor all states for emerging impacts.";
-  }
-};
-
-const analyzeKeywords = (transcript, states) => {
-  const stateScores = {};
-  states.forEach(state => { stateScores[state] = 0; });
-
-  const positiveWords = /\b(benefit|gain|opportunity|growth|advantage|positive|win|improve|boost|strengthen)\b/gi;
-  const negativeWords = /\b(risk|threat|harm|loss|negative|damage|suffer|decline|challenge|vulnerable|hurt)\b/gi;
-
-  transcript.forEach(entry => {
-    const state = entry.state;
-    const message = entry.message.toLowerCase();
-    const positiveCount = (message.match(positiveWords) || []).length;
-    const negativeCount = (message.match(negativeWords) || []).length;
-    stateScores[state] += (positiveCount - negativeCount);
-  });
-
-  const sorted = Object.entries(stateScores).sort((a, b) => b[1] - a[1]);
-  console.log("[KEYWORD ANALYSIS] State scores:", stateScores);
-  return { winner: sorted[0][0], loser: sorted[sorted.length - 1][0] };
-};
-
-const getCouncilVerdict = async (story, transcript, states) => {
-  const systemPrompt =
-    "You are the Council Moderator. Return ONLY valid JSON, no markdown, no explanation: " +
-    '{"winner":"StateName","loser":"StateName"}. ' +
-    "Winner = state that benefits MOST economically. Loser = state that suffers MOST economically. " +
-    "Use exact state names from the list.";
-  const userPrompt =
-    `Story: ${story.title}\n` +
-    `Debate:\n${buildTranscriptText(transcript)}\n\n` +
-    `States: ${states.join(", ")}\n` +
-    "Return JSON only:";
-  const messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt },
-  ];
-
-  try {
-    const response = await callLmStudio(messages, 150);
-    const cleaned = response.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
-    const verdict = parseJson(cleaned);
-    if (verdict && verdict.winner && verdict.loser) {
-      console.log("[VERDICT] LLM verdict:", verdict);
-      return verdict;
-    }
-    throw new Error("Invalid JSON structure");
-  } catch (error) {
-    console.error("[VERDICT] LLM verdict failed, using keyword analysis:", error.message);
-    const fallback = analyzeKeywords(transcript, states);
-    console.log("[VERDICT] Keyword fallback result:", fallback);
+    console.error(`[AGENT] Generation failed (${agent.state}):`, error.message);
+    const fallback = "Signal lost. Unable to reach local model.";
+    sendEvent("agent", { ...payloadBase, message: fallback });
     return fallback;
   }
 };
 
-const runCouncil = async (story) => {
-  if (councilRunning) {
-    return;
+const agentSpeak = async (agent, messages, maxTokens, round, label) => {
+  if (LMSTUDIO_STREAM) {
+    return streamAgentMessage(agent, messages, maxTokens, round, label);
   }
+  return getAgentMessage(agent, messages, maxTokens, round, label);
+};
+
+/* ─── Prompt Builders ───────────────────────────────────── */
+
+const buildImpactPrompt = (agent, story) => {
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          `You are the ${agent.state} representative. ` +
+          `Ruling party: ${agent.party}. Focus: ${agent.focus}. ` +
+          "Give a 1-2 sentence IMPACT DECLARATION only. State the specific sector affected " +
+          "and whether the impact is POSITIVE, NEGATIVE, or NEUTRAL for your state. " +
+          "No preamble. No greetings. Just the declaration.",
+      },
+      {
+        role: "user",
+        content:
+          `News: ${story.title}\n${story.description || "No summary."}\n\n` +
+          `How does this news specifically impact ${agent.state}'s economy?`,
+      },
+    ],
+    maxTokens: 120,
+  };
+};
+
+const buildSelectionPrompt = (declarations, allStates) => {
+  const declarationText = declarations.map((d) => `- ${d.state}: ${d.message}`).join("\n");
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          `You are the Council Moderator. Based on the impact declarations below, ` +
+          `select the top ${PANEL_SIZE} states that are MOST STRONGLY affected ` +
+          `(positive OR negative — intensity matters, not direction). ` +
+          `Return ONLY valid JSON: {"selected":["State1","State2",...], "benched":["State3",...]}. ` +
+          `Use exact state names from the list. No explanation. No markdown.`,
+      },
+      {
+        role: "user",
+        content:
+          `All declarations:\n${declarationText}\n\n` +
+          `All states: ${allStates.join(", ")}\n` +
+          `Select the top ${PANEL_SIZE} most intensely affected. Return JSON only:`,
+      },
+    ],
+    maxTokens: 200,
+  };
+};
+
+const buildOpeningPrompt = (agent, story, declarations, priorSpeeches) => {
+  const profile = `Ruling party: ${agent.party}. Ideology: ${agent.ideology}. Economic focus: ${agent.focus}.`;
+  const allies = Object.keys(STATE_PROFILES).filter(
+    (s) => STATE_PROFILES[s]?.party === agent.party && s !== agent.state
+  );
+  const allianceContext = allies.length
+    ? `Allied States: ${allies.join(", ")}. Coordinate with them.`
+    : "No direct party allies. Stand independently.";
+
+  const declarationText = declarations.map((d) => `- ${d.state}: ${d.message}`).join("\n");
+  const priorText = priorSpeeches.length
+    ? `\nSpeeches already given this round:\n${priorSpeeches.map((s) => `- ${s.state}: ${s.message}`).join("\n")}\n`
+    : "";
+
+  const chainOfThought =
+    "INSTRUCTIONS:\n" +
+    "1. First, write a <thought> block. Analyze: Who is your biggest threat? Who is your ally? What's your angle of attack?\n" +
+    "2. Then write your public speech (outside the tags). 2-3 sentences. Be sharp and political.";
+
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          `You are the ${agent.state} Council representative. ${profile} ${allianceContext} ` +
+          `Your stance: ${agent.stance}.\n${chainOfThought}`,
+      },
+      {
+        role: "user",
+        content:
+          `News: ${story.title}\n${story.description || "No summary."}\n\n` +
+          `Impact declarations from all states:\n${declarationText}\n` +
+          `${priorText}\n` +
+          `Deliver your opening statement. Reference at least one other state's declaration.`,
+      },
+    ],
+    maxTokens: 350,
+  };
+};
+
+const buildRebuttalPrompt = (agent, story, fullTranscript, currentRoundSpeeches) => {
+  const profile = `Ruling party: ${agent.party}. Ideology: ${agent.ideology}. Economic focus: ${agent.focus}.`;
+  const allies = Object.keys(STATE_PROFILES).filter(
+    (s) => STATE_PROFILES[s]?.party === agent.party && s !== agent.state
+  );
+  const allianceContext = allies.length
+    ? `Allied States: ${allies.join(", ")}. Defend them if attacked.`
+    : "No allies. You're on your own.";
+
+  const transcriptText = fullTranscript.map((t) => `- [${t.label}] ${t.state}: ${t.message}`).join("\n");
+  const currentText = currentRoundSpeeches.length
+    ? `\nRebuttals already given this round:\n${currentRoundSpeeches.map((s) => `- ${s.state}: ${s.message}`).join("\n")}\n`
+    : "";
+
+  const chainOfThought =
+    "INSTRUCTIONS:\n" +
+    "1. Write a <thought> block first. Identify the specific statement you'll attack. Plan your counter-argument.\n" +
+    "2. Then write your rebuttal (outside tags). 2-3 sentences. QUOTE the opponent's words and dismantle them.";
+
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          `You are the ${agent.state} Council representative. ${profile} ${allianceContext} ` +
+          `Stance: ${agent.stance}.\n${chainOfThought}`,
+      },
+      {
+        role: "user",
+        content:
+          `Full transcript so far:\n${transcriptText}\n${currentText}\n` +
+          `Story: ${story.title}\n\n` +
+          `Pick ONE opponent from the transcript. Quote their exact words. Explain why they're wrong.`,
+      },
+    ],
+    maxTokens: 400,
+  };
+};
+
+const buildReplyPrompt = (agent, story, fullTranscript) => {
+  const profile = `Ruling party: ${agent.party}. Ideology: ${agent.ideology}. Economic focus: ${agent.focus}.`;
+  const transcriptText = fullTranscript.map((t) => `- [${t.label}] ${t.state}: ${t.message}`).join("\n");
+
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          `You are the ${agent.state} Council representative. ${profile} ` +
+          `You were the most attacked state in this debate. You have the RIGHT OF REPLY. ` +
+          `This is your FINAL WORD. Be dignified but devastating. 2-3 sentences. No preamble.`,
+      },
+      {
+        role: "user",
+        content:
+          `Full debate transcript:\n${transcriptText}\n\n` +
+          `Story: ${story.title}\n\n` +
+          `Deliver your closing defense. Address the strongest attack made against you.`,
+      },
+    ],
+    maxTokens: 350,
+  };
+};
+
+/* ─── Selection Logic (Rebuttal & Reply) ────────────────── */
+
+const selectRebuttalPanel = async (story, transcript, panelStates) => {
+  const transcriptText = transcript.map((t) => `- [${t.label}] ${t.state}: ${t.message}`).join("\n");
+  const messages = [
+    {
+      role: "system",
+      content:
+        `You are the Council Moderator. From the debate transcript, select exactly ${REBUTTAL_SIZE} states ` +
+        `that should participate in the rebuttal round. Pick states with the MOST OPPOSING viewpoints ` +
+        `and the state that was MOST REFERENCED or ATTACKED by others. ` +
+        `Return ONLY valid JSON: {"rebuttal_panel":["State1","State2","State3"]}. ` +
+        `Use exact state names from the panel list. No explanation. No markdown.`,
+    },
+    {
+      role: "user",
+      content:
+        `Debate transcript:\n${transcriptText}\n\n` +
+        `Active panel: ${panelStates.join(", ")}\n` +
+        `Select exactly ${REBUTTAL_SIZE} for rebuttal. JSON only:`,
+    },
+  ];
+
+  try {
+    const response = await callLmStudio(messages, 150);
+    const cleaned = response.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+    const parsed = parseJson(cleaned);
+    if (parsed?.rebuttal_panel?.length) {
+      const valid = parsed.rebuttal_panel.filter((s) => panelStates.includes(s));
+      if (valid.length >= 2) {
+        console.log("[REBUTTAL SELECTION]", valid);
+        return valid.slice(0, REBUTTAL_SIZE);
+      }
+    }
+    throw new Error("Invalid rebuttal selection");
+  } catch (error) {
+    console.error("[REBUTTAL SELECTION] LLM failed, using first entries:", error.message);
+    return shuffle(panelStates).slice(0, REBUTTAL_SIZE);
+  }
+};
+
+const selectReplyState = async (story, transcript, rebuttalStates) => {
+  const transcriptText = transcript.map((t) => `- [${t.label}] ${t.state}: ${t.message}`).join("\n");
+  const messages = [
+    {
+      role: "system",
+      content:
+        `You are the Council Moderator. From the full debate transcript, identify the ONE state ` +
+        `that was MOST ATTACKED or CRITICIZED during the rebuttal round. ` +
+        `This state gets the Right of Reply. ` +
+        `Return ONLY valid JSON: {"reply_state":"StateName"}. Use exact state name. No markdown.`,
+    },
+    {
+      role: "user",
+      content:
+        `Debate transcript:\n${transcriptText}\n\n` +
+        `Rebuttal participants: ${rebuttalStates.join(", ")}\n` +
+        `Who was most attacked? JSON only:`,
+    },
+  ];
+
+  try {
+    const response = await callLmStudio(messages, 100);
+    const cleaned = response.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+    const parsed = parseJson(cleaned);
+    if (parsed?.reply_state && COUNCIL_STATES.includes(parsed.reply_state)) {
+      console.log("[REPLY SELECTION]", parsed.reply_state);
+      return parsed.reply_state;
+    }
+    throw new Error("Invalid reply selection");
+  } catch (error) {
+    console.error("[REPLY SELECTION] LLM failed, using first rebuttal state:", error.message);
+    return rebuttalStates[0];
+  }
+};
+
+/* ─── Summary & Verdict ─────────────────────────────────── */
+
+const getCouncilSummary = async (story, transcript) => {
+  const systemPrompt =
+    "You are a Strategic Systems Analyst. Synthesize the council debate objectively. " +
+    "No preamble. No parliamentary jargon. Exactly 2 sentences. " +
+    "Sentence 1: The primary economic issue all agents addressed. " +
+    "Sentence 2: Contrast the two most opposing states using 'While [State A] argues X, [State B] counters with Y'.";
+  const userPrompt =
+    `Story: ${story.title}\n` +
+    `Debate transcript:\n${buildTranscriptText(transcript)}\n\n` +
+    "Summarize:";
+  try {
+    const response = await callLmStudio(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      200
+    );
+    return sanitizeModelOutput(response);
+  } catch (error) {
+    console.error("Summary failed:", error.message);
+    return "Council reached no clear consensus.";
+  }
+};
+
+const analyzeKeywords = (transcript, states) => {
+  const scores = {};
+  states.forEach((s) => (scores[s] = 0));
+  const pos = /\b(benefit|gain|opportunity|growth|advantage|positive|win|improve|boost|strengthen)\b/gi;
+  const neg = /\b(risk|threat|harm|loss|negative|damage|suffer|decline|challenge|vulnerable|hurt)\b/gi;
+  transcript.forEach((entry) => {
+    if (!scores.hasOwnProperty(entry.state)) return;
+    const msg = entry.message.toLowerCase();
+    scores[entry.state] += (msg.match(pos) || []).length - (msg.match(neg) || []).length;
+  });
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  console.log("[KEYWORD ANALYSIS]", scores);
+  return { winner: sorted[0][0], loser: sorted[sorted.length - 1][0] };
+};
+
+const getCouncilVerdict = async (story, transcript, states) => {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are the Council Moderator. Return ONLY valid JSON, no markdown, no explanation: " +
+        '{"winner":"StateName","loser":"StateName"}. ' +
+        "Winner = state that benefits MOST economically. Loser = state that suffers MOST. Use exact state names.",
+    },
+    {
+      role: "user",
+      content:
+        `Story: ${story.title}\n` +
+        `Debate:\n${buildTranscriptText(transcript)}\n\n` +
+        `States: ${states.join(", ")}\nReturn JSON only:`,
+    },
+  ];
+  try {
+    const response = await callLmStudio(messages, 150);
+    const cleaned = response.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+    const verdict = parseJson(cleaned);
+    if (verdict?.winner && verdict?.loser) {
+      console.log("[VERDICT]", verdict);
+      return verdict;
+    }
+    throw new Error("Invalid verdict JSON");
+  } catch (error) {
+    console.error("[VERDICT] fallback to keywords:", error.message);
+    return analyzeKeywords(transcript, states);
+  }
+};
+
+/* ─── Main Council Pipeline ─────────────────────────────── */
+
+const runCouncil = async (story) => {
+  if (councilRunning) return;
   councilRunning = true;
 
-  const agents = buildAgentRoster();
+  const allAgents = buildAgentRoster();
+  const allStates = allAgents.map((a) => a.state);
+  const transcript = [];
+
   sendEvent("council_start", {
     story: { title: story.title, url: story.url },
-    agents: agents.map((agent) => ({ name: agent.name, state: agent.state })),
+    agents: allAgents.map((a) => ({ name: a.name, state: a.state })),
   });
 
-  const transcript = [];
-  for (let round = 0; round < COUNCIL_ROUNDS; round += 1) {
-    const roundNumber = round + 1;
-    const roundRules = round === 0
-      ? "Round 1 rules: 2-3 sentences, state benefits or harms, name a sector impacted."
-      : "Round 2 rules: 2-3 sentences, rebut another state and defend your position.";
-    sendEvent("system", {
-      message: `Conducting Round ${roundNumber}.\n${roundRules}`,
-    });
-    for (const agent of agents) {
-      const message = LMSTUDIO_STREAM
-        ? await streamAgentMessage(agent, story, transcript, round)
-        : await getAgentMessage(agent, story, transcript, round);
-      const payload = { agent: agent.name, state: agent.state, message, round };
-      transcript.push(payload);
-      if (!LMSTUDIO_STREAM) {
-        sendEvent("agent", payload);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
+  /* ─── ROUND 0: Impact Declarations (all states) ──────── */
+  console.log("\n═══ ROUND 0: IMPACT DECLARATIONS ═══");
+  sendEvent("round_start", { round: 0, label: "Impact Declarations", count: allAgents.length });
+  sendEvent("system", {
+    message: `ROUND 0 — IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this news affects them.`,
+  });
+
+  const declarations = [];
+  for (const agent of allAgents) {
+    const { messages, maxTokens } = buildImpactPrompt(agent, story);
+    const message = await agentSpeak(agent, messages, maxTokens, 0, "Declaration");
+    const entry = { agent: agent.name, state: agent.state, message, round: 0, label: "Declaration" };
+    transcript.push(entry);
+    declarations.push(entry);
+    await new Promise((r) => setTimeout(r, 300));
   }
 
-  const summary = await getCouncilSummary(story, transcript);
-  const verdict = await getCouncilVerdict(
-    story,
-    transcript,
-    agents.map((agent) => agent.state)
+  /* ─── SELECTION: Pick top panel ───────────────────────── */
+  console.log("\n═══ SELECTION: Moderator analyzing declarations ═══");
+  sendEvent("system", {
+    message: `SELECTION — Moderator is analyzing declarations to select the top ${PANEL_SIZE} states...`,
+  });
+
+  let selectedStates = [];
+  let benchedStates = [];
+
+  const { messages: selMessages, maxTokens: selTokens } = buildSelectionPrompt(declarations, allStates);
+  try {
+    const selResponse = await callLmStudio(selMessages, selTokens);
+    const selCleaned = selResponse.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+    const selParsed = parseJson(selCleaned);
+    if (selParsed?.selected?.length) {
+      const validSelected = selParsed.selected.filter((s) => allStates.includes(s));
+      if (validSelected.length >= 2) {
+        selectedStates = validSelected.slice(0, PANEL_SIZE);
+        benchedStates = allStates.filter((s) => !selectedStates.includes(s));
+      }
+    }
+    if (!selectedStates.length) throw new Error("Invalid selection JSON");
+  } catch (error) {
+    console.error("[SELECTION] LLM failed, using first entries:", error.message);
+    selectedStates = shuffle(allStates).slice(0, PANEL_SIZE);
+    benchedStates = allStates.filter((s) => !selectedStates.includes(s));
+  }
+
+  console.log("[SELECTION] Active panel:", selectedStates);
+  console.log("[SELECTION] Benched:", benchedStates);
+
+  sendEvent("panel_selected", { selected: selectedStates, benched: benchedStates });
+  sendEvent("system", {
+    message: `PANEL SELECTED: ${selectedStates.join(", ")}\nBenched: ${benchedStates.join(", ")}`,
+  });
+
+  const panelAgents = selectedStates.map((s) => allAgents.find((a) => a.state === s)).filter(Boolean);
+
+  /* ─── ROUND 1: Opening Statements (panel only) ───────── */
+  const shuffledPanel = shuffle(panelAgents);
+  console.log("\n═══ ROUND 1: OPENING STATEMENTS ═══");
+  console.log("[ORDER]", shuffledPanel.map((a) => a.state).join(" → "));
+  sendEvent("round_start", {
+    round: 1,
+    label: "Opening Statements",
+    count: shuffledPanel.length,
+    order: shuffledPanel.map((a) => a.state),
+  });
+  sendEvent("system", {
+    message: `ROUND 1 — OPENING STATEMENTS\nSpeaking order: ${shuffledPanel.map((a) => a.state).join(" → ")}`,
+  });
+
+  const round1Speeches = [];
+  for (const agent of shuffledPanel) {
+    const { messages, maxTokens } = buildOpeningPrompt(agent, story, declarations, round1Speeches);
+    const message = await agentSpeak(agent, messages, maxTokens, 1, "Opening");
+    const entry = { agent: agent.name, state: agent.state, message, round: 1, label: "Opening" };
+    transcript.push(entry);
+    round1Speeches.push(entry);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  /* ─── ROUND 2: Rebuttals (narrowed panel) ─────────────── */
+  console.log("\n═══ ROUND 2: REBUTTALS ═══");
+  sendEvent("system", {
+    message: `SELECTION — Moderator is selecting ${REBUTTAL_SIZE} states for the rebuttal round...`,
+  });
+
+  const rebuttalStates = await selectRebuttalPanel(story, transcript, selectedStates);
+  const rebuttalAgents = shuffle(
+    rebuttalStates.map((s) => allAgents.find((a) => a.state === s)).filter(Boolean)
   );
+
+  console.log("[REBUTTAL ORDER]", rebuttalAgents.map((a) => a.state).join(" → "));
+  sendEvent("rebuttal_selected", { rebuttal_panel: rebuttalStates });
+  sendEvent("round_start", {
+    round: 2,
+    label: "Rebuttals",
+    count: rebuttalAgents.length,
+    order: rebuttalAgents.map((a) => a.state),
+  });
+  sendEvent("system", {
+    message: `ROUND 2 — REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will debate.`,
+  });
+
+  const round2Speeches = [];
+  for (const agent of rebuttalAgents) {
+    const { messages, maxTokens } = buildRebuttalPrompt(agent, story, transcript, round2Speeches);
+    const message = await agentSpeak(agent, messages, maxTokens, 2, "Rebuttal");
+    const entry = { agent: agent.name, state: agent.state, message, round: 2, label: "Rebuttal" };
+    transcript.push(entry);
+    round2Speeches.push(entry);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  /* ─── ROUND 3: Right of Reply (1 state) ───────────────── */
+  console.log("\n═══ ROUND 3: RIGHT OF REPLY ═══");
+  sendEvent("system", {
+    message: "SELECTION — Moderator is identifying the most attacked state for Right of Reply...",
+  });
+
+  const replyStateName = await selectReplyState(story, transcript, rebuttalStates);
+  const replyAgent = allAgents.find((a) => a.state === replyStateName);
+
+  if (replyAgent) {
+    console.log("[RIGHT OF REPLY]", replyAgent.state);
+    sendEvent("reply_selected", { reply_state: replyStateName });
+    sendEvent("round_start", {
+      round: 3,
+      label: "Right of Reply",
+      count: 1,
+      order: [replyStateName],
+    });
+    sendEvent("system", {
+      message: `ROUND 3 — RIGHT OF REPLY\n${replyStateName} has the final word.`,
+    });
+
+    const { messages, maxTokens } = buildReplyPrompt(replyAgent, story, transcript);
+    const message = await agentSpeak(replyAgent, messages, maxTokens, 3, "Right of Reply");
+    transcript.push({ agent: replyAgent.name, state: replyAgent.state, message, round: 3, label: "Right of Reply" });
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  /* ─── Summary & Verdict ───────────────────────────────── */
+  console.log("\n═══ SUMMARY & VERDICT ═══");
+  const summary = await getCouncilSummary(story, transcript);
+  const verdict = await getCouncilVerdict(story, transcript, allStates);
+
   sendEvent("council_end", {
     summary,
     winner: verdict?.winner || "",
     loser: verdict?.loser || "",
     impacts: [],
   });
+
+  console.log("[DONE] Winner:", verdict?.winner, "| Loser:", verdict?.loser);
   councilRunning = false;
 };
 

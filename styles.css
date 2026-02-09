@@ -429,6 +429,50 @@ body {
   box-shadow: 0 0 14px rgba(252, 165, 165, 0.25);
 }
 
+.agent-card.team-congress .agent-speech {
+  border-color: rgba(147, 197, 253, 0.55);
+  box-shadow: 0 0 14px rgba(147, 197, 253, 0.25);
+}
+
+.agent-card.team-tmc .agent-speech {
+  border-color: rgba(165, 180, 252, 0.55);
+  box-shadow: 0 0 14px rgba(165, 180, 252, 0.25);
+}
+
+/* Benched states */
+.agent-card.benched {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.agent-card.benched .agent-speech {
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+
+.agent-card.benched .agent-avatar {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+/* Speech type labels */
+.agent-speech.speech-declaration {
+  border-left: 3px solid rgba(255, 255, 255, 0.3);
+}
+
+.agent-speech.speech-opening {
+  border-left: 3px solid rgba(125, 211, 252, 0.6);
+}
+
+.agent-speech.speech-rebuttal {
+  border-left: 3px solid rgba(252, 165, 165, 0.6);
+}
+
+.agent-speech.speech-right-of-reply {
+  border-left: 3px solid rgba(252, 211, 77, 0.7);
+  background: #1a1a1a;
+}
+
 .agent-avatar {
   width: 38px;
   height: 38px;
