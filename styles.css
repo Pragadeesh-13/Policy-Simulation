@@ -568,10 +568,16 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.system-round-tab.current {
+  border-color: rgba(125, 211, 252, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.22);
+}
+
 .system-round-controls {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 8px;
 }
 
 .system-round-controls .begin-round-btn {
@@ -585,6 +591,16 @@ body {
 .system-round-controls .begin-round-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.3);
+}
+
+.system-round-controls .begin-round-btn:disabled,
+.system-round-controls .begin-round-btn.disabled,
+.system-round-tab:disabled,
+.system-round-tab.disabled,
+.feed-btn:disabled,
+#topic-input:disabled,
+.compact-mode-btn:disabled {
+  cursor: not-allowed !important;
 }
 
 .system-messages-scroll {
@@ -616,6 +632,22 @@ body {
 }
 
 .system-round-view.active {
+  display: flex;
+}
+
+.council-round-views {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.council-round-view {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.council-round-view.active {
   display: flex;
 }
 
@@ -932,7 +964,7 @@ body {
 .begin-round-btn.disabled,
 .begin-round-btn:disabled {
   opacity: 0.5;
-  cursor: default;
+  cursor: not-allowed;
 }
 .round-messages {
   display: flex;

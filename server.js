@@ -815,7 +815,7 @@ const runCouncil = async (story) => {
   sendEvent("round_start", { round: 0, label: "Impact Declarations", count: allAgents.length });
   sendEvent("system", {
     round: 0,
-    message: `ROUND 0 — IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this news affects them.`,
+    message: `Round 0: IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this news affects them.`,
   });
   await waitForRoundBegin(0);
 
@@ -832,8 +832,10 @@ const runCouncil = async (story) => {
   /* ─── SELECTION: Pick top panel ───────────────────────── */
   console.log("\n═══ SELECTION: Moderator analyzing declarations ═══");
   sendEvent("system", {
-    round: 1,
-    message: `SELECTION — Moderator is analyzing declarations to select the top ${PANEL_SIZE} states...`,
+    round: 0,
+    loading: true,
+    stream: true,
+    message: "Moderator is now analysing all arguments and choosing which states move to round 1...",
   });
 
   let selectedStates = [];
@@ -861,17 +863,13 @@ const runCouncil = async (story) => {
   console.log("[SELECTION] Active panel:", selectedStates);
   console.log("[SELECTION] Benched:", benchedStates);
 
-  sendEvent("panel_selected", { selected: selectedStates, benched: benchedStates });
-  sendEvent("system", {
-    round: 1,
-    message: `PANEL SELECTED: ${selectedStates.join(", ")}\nBenched: ${benchedStates.join(", ")}`,
-  });
+  sendEvent("panel_selected", { round: 1, selected: selectedStates, benched: benchedStates });
 
   const panelAgents = selectedStates.map((s) => allAgents.find((a) => a.state === s)).filter(Boolean);
 
   /* ─── ROUND 1: Opening Statements (panel only) ───────── */
   const shuffledPanel = shuffle(panelAgents);
-  console.log("\n═══ ROUND 1: OPENING STATEMENTS ═══");
+  console.log("\nRound 1: OPENING STATEMENTS");
   console.log("[ORDER]", shuffledPanel.map((a) => a.state).join(" → "));
   sendEvent("round_start", {
     round: 1,
@@ -881,7 +879,11 @@ const runCouncil = async (story) => {
   });
   sendEvent("system", {
     round: 1,
-    message: `ROUND 1 — OPENING STATEMENTS\nSpeaking order: ${shuffledPanel.map((a) => a.state).join(" → ")}`,
+    message:
+      `Round 1: OPENING STATEMENTS\n` +
+      `PANEL SELECTED: ${selectedStates.join(", ")}\n` +
+      `Benched: ${benchedStates.join(", ")}\n` +
+      `Speaking order: ${shuffledPanel.map((a) => a.state).join(" → ")}`,
   });
   await waitForRoundBegin(1);
 
@@ -898,8 +900,10 @@ const runCouncil = async (story) => {
   /* ─── ROUND 2: Rebuttals (narrowed panel) ─────────────── */
   console.log("\n═══ ROUND 2: REBUTTALS ═══");
   sendEvent("system", {
-    round: 2,
-    message: `SELECTION — Moderator is selecting ${REBUTTAL_SIZE} states for the rebuttal round...`,
+    round: 1,
+    loading: true,
+    stream: true,
+    message: `Moderator is now analysing all arguments and choosing which states move to round 2...`,
   });
 
   const rebuttalStates = await selectRebuttalPanel(story, transcript, selectedStates);
@@ -908,7 +912,7 @@ const runCouncil = async (story) => {
   );
 
   console.log("[REBUTTAL ORDER]", rebuttalAgents.map((a) => a.state).join(" → "));
-  sendEvent("rebuttal_selected", { rebuttal_panel: rebuttalStates });
+  sendEvent("rebuttal_selected", { round: 2, rebuttal_panel: rebuttalStates });
   sendEvent("round_start", {
     round: 2,
     label: "Rebuttals",
@@ -917,7 +921,7 @@ const runCouncil = async (story) => {
   });
   sendEvent("system", {
     round: 2,
-    message: `ROUND 2 — REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will debate.`,
+    message: `Round 2: REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will debate.`,
   });
   await waitForRoundBegin(2);
 
@@ -934,8 +938,10 @@ const runCouncil = async (story) => {
   /* ─── ROUND 3: Right of Reply (1 state) ───────────────── */
   console.log("\n═══ ROUND 3: RIGHT OF REPLY ═══");
   sendEvent("system", {
-    round: 3,
-    message: "SELECTION — Moderator is identifying the most attacked state for Right of Reply...",
+    round: 2,
+    loading: true,
+    stream: true,
+    message: "Moderator is identifying the most attacked state for Right of Reply...",
   });
 
   const replyStateName = await selectReplyState(story, transcript, rebuttalStates);
@@ -943,7 +949,7 @@ const runCouncil = async (story) => {
 
   if (replyAgent) {
     console.log("[RIGHT OF REPLY]", replyAgent.state);
-    sendEvent("reply_selected", { reply_state: replyStateName });
+    sendEvent("reply_selected", { round: 3, reply_state: replyStateName });
     sendEvent("round_start", {
       round: 3,
       label: "Right of Reply",
@@ -952,7 +958,10 @@ const runCouncil = async (story) => {
     });
     sendEvent("system", {
       round: 3,
-      message: `ROUND 3 — RIGHT OF REPLY\n${replyStateName} has the final word.`,
+      message:
+        `Round 3: RIGHT OF REPLY\n` +
+        `Right of Reply granted to: ${replyStateName}\n` +
+        `${replyStateName} has the final word.`,
     });
     await waitForRoundBegin(3);
 
@@ -964,10 +973,27 @@ const runCouncil = async (story) => {
 
   /* ─── Summary & Verdict ───────────────────────────────── */
   console.log("\n═══ SUMMARY & VERDICT ═══");
+  sendEvent("round_start", {
+    round: 4,
+    label: "Verdict",
+    count: 0,
+    order: [],
+  });
+  sendEvent("system", {
+    round: 4,
+    message: "Verdict",
+  });
+  sendEvent("system", {
+    round: 4,
+    loading: true,
+    stream: true,
+    message: "Moderator is now analysing final arguments and preparing the verdict...",
+  });
   const summary = await getCouncilSummary(story, transcript);
   const verdict = await getCouncilVerdict(story, transcript, allStates);
 
   sendEvent("council_end", {
+    round: 4,
     summary,
     winner: verdict?.winner || "",
     loser: verdict?.loser || "",

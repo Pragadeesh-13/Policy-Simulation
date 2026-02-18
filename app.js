@@ -176,12 +176,15 @@ let fetchLocked = false;
 let pendingCouncilCardTimers = [];
 let debateRunningTimer = null;
 let councilsBooted = false;
+const systemNoteQueue = [];
+let systemNoteStreaming = false;
 let systemNotesContainer = null;
 let agentsContainer = null;
 let llmMessagesContainer = null;
 let otherAgentsContainer = null;
 let councilHeaderEl = null;
 let councilOrchestratorCardEl = null;
+let councilRoundViewsContainer = null;
 let systemPanelContainer = null;
 let councilPanelContainer = null;
 let systemRoundTabsContainer = null;
@@ -193,6 +196,16 @@ let activeSystemRound = null;
 let currentSystemRound = null;
 let compactModeBtn = null;
 const roundContainers = new Map();
+const councilRoundContainers = new Map();
+const roundTabLabels = new Map();
+
+const getRoundTabLabel = (roundId) => roundTabLabels.get(roundId) || `View round ${roundId}`;
+
+const getAgentCardKey = (payload = {}) => {
+  const name = payload.agent || "Council";
+  const roundId = normalizeRoundId(payload.round);
+  return `${roundId === null ? "x" : roundId}:${name}`;
+};
 
 const setFeedCollapsed = (collapsed) => {
   if (!layoutElement || !feedList) {
@@ -300,10 +313,11 @@ const updateCouncilEmptyState = () => {
   if (!councilOrchestratorCardEl) {
     return;
   }
-  const hasMessages =
-    (llmMessagesContainer?.children?.length || 0) +
-      (otherAgentsContainer?.children?.length || 0) >
-    0;
+  let messageCount = 0;
+  councilRoundContainers.forEach((entry) => {
+    messageCount += (entry.llm?.children?.length || 0) + (entry.others?.children?.length || 0);
+  });
+  const hasMessages = messageCount > 0;
   councilOrchestratorCardEl.style.display = !hasMessages && !fetchLocked ? "grid" : "none";
 };
 
@@ -395,7 +409,36 @@ const setActiveSystemRound = (roundId) => {
       entry.tab.classList.toggle("active", id === roundId);
     }
   });
+  if (systemGeneralMessagesContainer) {
+    systemGeneralMessagesContainer.style.display = roundId === null ? "flex" : "none";
+  }
   activeSystemRound = roundId;
+  updateRoundTabMarkers();
+};
+
+const updateRoundTabMarkers = () => {
+  roundContainers.forEach((entry, id) => {
+    if (!entry.tab) {
+      return;
+    }
+    const isCurrent = currentSystemRound === id;
+    const baseLabel = getRoundTabLabel(id);
+    entry.tab.classList.toggle("current", isCurrent);
+    entry.tab.textContent = isCurrent ? `${baseLabel} • Current` : baseLabel;
+  });
+};
+
+const setActiveCouncilRound = (roundId) => {
+  councilRoundContainers.forEach((entry, id) => {
+    if (entry.view) {
+      entry.view.classList.toggle("active", id === roundId);
+    }
+  });
+};
+
+const setActiveRound = (roundId) => {
+  setActiveSystemRound(roundId);
+  setActiveCouncilRound(roundId);
 };
 
 const addCompletedRoundTab = (roundId) => {
@@ -405,12 +448,13 @@ const addCompletedRoundTab = (roundId) => {
   }
   const tab = document.createElement("button");
   tab.className = "system-round-tab";
-  tab.textContent = `Round ${roundId}`;
+  tab.textContent = getRoundTabLabel(roundId);
   tab.addEventListener("click", () => {
-    setActiveSystemRound(roundId);
+    setActiveRound(roundId);
   });
   systemRoundTabsContainer.appendChild(tab);
   round.tab = tab;
+  updateRoundTabMarkers();
 };
 
 const ensureRoundContainer = (round) => {
@@ -429,7 +473,46 @@ const ensureRoundContainer = (round) => {
   systemRoundViewsContainer.appendChild(view);
 
   const payload = { roundId, view, tab: null };
+  if (systemRoundTabsContainer) {
+    const tab = document.createElement("button");
+    tab.className = "system-round-tab";
+    tab.textContent = getRoundTabLabel(roundId);
+    tab.addEventListener("click", () => {
+      setActiveRound(roundId);
+    });
+    systemRoundTabsContainer.appendChild(tab);
+    payload.tab = tab;
+  }
   roundContainers.set(roundId, payload);
+  updateRoundTabMarkers();
+  return payload;
+};
+
+const ensureCouncilRoundContainer = (round) => {
+  const roundId = normalizeRoundId(round);
+  if (roundId === null) {
+    return null;
+  }
+  ensureAgentsContainer();
+  if (councilRoundContainers.has(roundId)) {
+    return councilRoundContainers.get(roundId);
+  }
+
+  const view = document.createElement("div");
+  view.className = "council-round-view";
+  view.dataset.round = String(roundId);
+
+  const llm = document.createElement("div");
+  llm.className = "llm-messages";
+  const others = document.createElement("div");
+  others.className = "other-agents";
+
+  view.appendChild(llm);
+  view.appendChild(others);
+  councilRoundViewsContainer?.appendChild(view);
+
+  const payload = { roundId, view, llm, others };
+  councilRoundContainers.set(roundId, payload);
   return payload;
 };
 
@@ -451,6 +534,22 @@ const setRoundBeginControl = (roundId, options = {}) => {
     btn.classList.add("disabled");
     btn.textContent = "Councils are booting...";
     systemRoundControlsContainer.appendChild(btn);
+    if (currentSystemRound !== null) {
+      const goCurrentBtn = document.createElement("button");
+      goCurrentBtn.className = "begin-round-btn go-current-round-btn";
+      goCurrentBtn.textContent = "Go to current round";
+      goCurrentBtn.disabled = activeSystemRound === currentSystemRound;
+      if (goCurrentBtn.disabled) {
+        goCurrentBtn.classList.add("disabled");
+      }
+      goCurrentBtn.addEventListener("click", () => {
+        if (currentSystemRound === null) {
+          return;
+        }
+        setActiveRound(currentSystemRound);
+      });
+      systemRoundControlsContainer.appendChild(goCurrentBtn);
+    }
     return;
   }
   btn.textContent = `Begin round ${roundId}`;
@@ -475,6 +574,23 @@ const setRoundBeginControl = (roundId, options = {}) => {
   });
 
   systemRoundControlsContainer.appendChild(btn);
+
+  if (currentSystemRound !== null) {
+    const goCurrentBtn = document.createElement("button");
+    goCurrentBtn.className = "begin-round-btn go-current-round-btn";
+    goCurrentBtn.textContent = "Go to current round";
+    goCurrentBtn.disabled = activeSystemRound === currentSystemRound;
+    if (goCurrentBtn.disabled) {
+      goCurrentBtn.classList.add("disabled");
+    }
+    goCurrentBtn.addEventListener("click", () => {
+      if (currentSystemRound === null) {
+        return;
+      }
+      setActiveRound(currentSystemRound);
+    });
+    systemRoundControlsContainer.appendChild(goCurrentBtn);
+  }
 };
 
 const ensureSystemNotesContainer = () => {
@@ -543,27 +659,27 @@ const ensureAgentsContainer = () => {
 
   const orchestrator = createAgentCard({
     name: "Council Orchestrator",
-    message: "Begin a debate to see the council's responses.",
+    message: "",
   });
   orchestrator.classList.add("council-orchestrator");
   orchestrator.classList.add("system");
   container.appendChild(orchestrator);
+  streamCardMessage(orchestrator, "Begin a debate to see the council's responses.", {
+    speed: 50,
+  });
 
-  // subcontainers: LLM-specific messages and other agents
-  const llm = document.createElement("div");
-  llm.className = "llm-messages";
-  container.appendChild(llm);
-  const others = document.createElement("div");
-  others.className = "other-agents";
-  container.appendChild(others);
+  const views = document.createElement("div");
+  views.className = "council-round-views";
+  container.appendChild(views);
 
   councilPanelContainer.appendChild(container);
 
   agentsContainer = container;
-  llmMessagesContainer = llm;
-  otherAgentsContainer = others;
+  llmMessagesContainer = null;
+  otherAgentsContainer = null;
   councilHeaderEl = header;
   councilOrchestratorCardEl = orchestrator;
+  councilRoundViewsContainer = views;
   updateCouncilEmptyState();
   return container;
 };
@@ -573,12 +689,11 @@ const resetCouncilRoundWindow = () => {
   pendingCouncilCardTimers = [];
   agentCards.clear();
   agentStreamEntries.clear();
-  if (llmMessagesContainer) {
-    llmMessagesContainer.innerHTML = "";
-  }
-  if (otherAgentsContainer) {
-    otherAgentsContainer.innerHTML = "";
-  }
+  councilRoundContainers.forEach((entry) => {
+    entry.llm.innerHTML = "";
+    entry.others.innerHTML = "";
+  });
+  councilRoundContainers.clear();
   updateCouncilEmptyState();
 };
 
@@ -590,15 +705,19 @@ const normalizeRoundId = (value) => {
   return Math.trunc(parsed);
 };
 
-const insertAgentCard = (card) => {
+const insertAgentCard = (card, round) => {
   ensureAgentsContainer();
+  const roundId = normalizeRoundId(round);
+  const target = roundId !== null ? ensureCouncilRoundContainer(roundId) : null;
   // tag cards with their agent name when available
   const agentName = card.dataset.agentName || "";
   if (agentName && agentName.toLowerCase() === "llm") {
-    if (llmMessagesContainer) llmMessagesContainer.appendChild(card);
+    if (target?.llm) target.llm.appendChild(card);
+    else if (llmMessagesContainer) llmMessagesContainer.appendChild(card);
     else agentsContainer.appendChild(card);
   } else {
-    if (otherAgentsContainer) otherAgentsContainer.appendChild(card);
+    if (target?.others) target.others.appendChild(card);
+    else if (otherAgentsContainer) otherAgentsContainer.appendChild(card);
     else agentsContainer.appendChild(card);
   }
   updateCouncilEmptyState();
@@ -951,6 +1070,7 @@ const resetCouncil = (agents = []) => {
   otherAgentsContainer = null;
   councilHeaderEl = null;
   councilOrchestratorCardEl = null;
+  councilRoundViewsContainer = null;
   systemPanelContainer = null;
   councilPanelContainer = null;
   systemRoundTabsContainer = null;
@@ -961,6 +1081,8 @@ const resetCouncil = (agents = []) => {
   activeSystemRound = null;
   currentSystemRound = null;
   roundContainers.clear();
+  councilRoundContainers.clear();
+  roundTabLabels.clear();
   ensureSystemNotesContainer();
   ensureAgentsContainer();
   updateCouncilEmptyState();
@@ -971,8 +1093,9 @@ const resetCouncil = (agents = []) => {
       message: "Standing by...",
       muted: true,
     });
-    agentCards.set(agent.name, card);
-    insertAgentCard(card);
+    const key = `0:${agent.name}`;
+    agentCards.set(key, card);
+    insertAgentCard(card, 0);
   });
 };
 
@@ -989,6 +1112,7 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
   otherAgentsContainer = null;
   councilHeaderEl = null;
   councilOrchestratorCardEl = null;
+  councilRoundViewsContainer = null;
   systemPanelContainer = null;
   councilPanelContainer = null;
   systemRoundTabsContainer = null;
@@ -999,17 +1123,19 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
   activeSystemRound = null;
   currentSystemRound = null;
   roundContainers.clear();
+  councilRoundContainers.clear();
+  roundTabLabels.clear();
   ensureSystemNotesContainer();
   ensureAgentsContainer();
   updateCouncilEmptyState();
-  insertAgentCard(createBootingCard());
+  insertAgentCard(createBootingCard(), 0);
   let loadedCount = 0;
   if (!agents.length) {
     markCouncilBooted();
   }
   agents.forEach((agent, index) => {
     const timer = setTimeout(() => {
-      if (agentCards.has(agent.name)) {
+      if (agentCards.has(`0:${agent.name}`)) {
         return;
       }
       const card = createAgentCard({
@@ -1018,8 +1144,9 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
         message: "Standing by...",
         muted: true,
       });
-      agentCards.set(agent.name, card);
-      insertAgentCard(card);
+      const key = `0:${agent.name}`;
+      agentCards.set(key, card);
+      insertAgentCard(card, 0);
       loadedCount += 1;
       if (loadedCount >= agents.length) {
         markCouncilBooted();
@@ -1031,12 +1158,14 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
 
 const upsertAgentStreamMessage = (payload) => {
   const name = payload.agent || "Council";
+  const roundId = normalizeRoundId(payload.round);
+  const cardKey = getAgentCardKey(payload);
   agentCards.forEach((existing) => existing.classList.remove("speaking"));
-  let card = agentCards.get(name);
+  let card = agentCards.get(cardKey);
   if (!card) {
     card = createAgentCard({ name, state: payload.state, message: "" });
-    agentCards.set(name, card);
-    insertAgentCard(card);
+    agentCards.set(cardKey, card);
+    insertAgentCard(card, roundId);
   }
   removeBootingCard();
   removeStandingBy(card);
@@ -1087,12 +1216,14 @@ const upsertAgentStreamMessage = (payload) => {
 
 const upsertAgentMessage = (payload) => {
   const name = payload.agent || "Council";
+  const roundId = normalizeRoundId(payload.round);
+  const cardKey = getAgentCardKey(payload);
   agentCards.forEach((existing) => existing.classList.remove("speaking"));
-  let card = agentCards.get(name);
+  let card = agentCards.get(cardKey);
   if (!card) {
     card = createAgentCard({ name, state: payload.state, message: payload.message });
-    agentCards.set(name, card);
-    insertAgentCard(card);
+    agentCards.set(cardKey, card);
+    insertAgentCard(card, roundId);
   } else {
     {
     const speechList = card.querySelector(".agent-speech-list");
@@ -1161,7 +1292,7 @@ const addSystemNote = (message, options = {}) => {
     const round = ensureRoundContainer(roundId);
     round?.view.append(note);
     if (activeSystemRound === null) {
-      setActiveSystemRound(roundId);
+      setActiveRound(roundId);
     }
   } else {
     ensureSystemNotesContainer();
@@ -1171,6 +1302,111 @@ const addSystemNote = (message, options = {}) => {
     scrollToTop(systemMessagesScrollContainer);
   }
   return note;
+};
+
+const streamCardMessage = (card, message, options = {}) =>
+  new Promise((resolve) => {
+    const speechList = card?.querySelector(".agent-speech-list");
+    const text = String(message || "");
+    const lines = text.split("\n");
+    const speed = Number.isFinite(options.speed) ? options.speed : 50;
+
+    if (!speechList) {
+      resolve(card);
+      return;
+    }
+
+    speechList.innerHTML = "";
+
+    if (!text.trim()) {
+      resolve(card);
+      return;
+    }
+
+    let lineIndex = 0;
+    let charIndex = 0;
+    let currentEntry = document.createElement("div");
+    currentEntry.className = "agent-speech system-streaming";
+    if (options.loading) {
+      currentEntry.classList.add("loading");
+    }
+    speechList.appendChild(currentEntry);
+
+    const scrollContainer = options.scrollContainer || null;
+
+    const step = () => {
+      const line = lines[lineIndex] || "";
+      if (charIndex <= line.length) {
+        currentEntry.textContent = line.slice(0, charIndex);
+        charIndex += 1;
+        if (scrollContainer && isNearTop(scrollContainer)) {
+          scrollToTop(scrollContainer);
+        }
+        return;
+      }
+
+      currentEntry.classList.remove("system-streaming");
+      lineIndex += 1;
+      if (lineIndex >= lines.length) {
+        resolve(card);
+        return;
+      }
+
+      charIndex = 0;
+      currentEntry = document.createElement("div");
+      currentEntry.className = "agent-speech system-streaming";
+      if (options.loading) {
+        currentEntry.classList.add("loading");
+      }
+      speechList.appendChild(currentEntry);
+    };
+
+    const timer = setInterval(() => {
+      step();
+      if (lineIndex >= lines.length) {
+        clearInterval(timer);
+      }
+    }, speed);
+  });
+
+const streamSystemNote = (message, options = {}) =>
+  new Promise((resolve) => {
+    const note = createAgentCard({ name: "System", message: "", muted: true });
+
+    const roundId = normalizeRoundId(options.round);
+    if (roundId !== null) {
+      const round = ensureRoundContainer(roundId);
+      round?.view.append(note);
+      if (activeSystemRound === null) {
+        setActiveRound(roundId);
+      }
+    } else {
+      ensureSystemNotesContainer();
+      systemGeneralMessagesContainer?.append(note);
+    }
+    streamCardMessage(note, message, {
+      speed: 50,
+      loading: Boolean(options.loading),
+      scrollContainer: systemMessagesScrollContainer,
+    }).then(() => resolve(note));
+  });
+
+const processSystemNoteQueue = async () => {
+  if (systemNoteStreaming) {
+    return;
+  }
+  systemNoteStreaming = true;
+  try {
+    while (systemNoteQueue.length) {
+      const item = systemNoteQueue.shift();
+      if (!item || !item.message) {
+        continue;
+      }
+      await streamSystemNote(item.message, item.options || {});
+    }
+  } finally {
+    systemNoteStreaming = false;
+  }
 };
 // expose for handlers that may run later or from other scopes
 try {
@@ -1185,7 +1421,12 @@ try {
 const safeAddNote = (message, options = {}) => {
   try {
     if (typeof window !== "undefined" && typeof window["addSystemNote"] === "function") {
-      return window["addSystemNote"](message, options);
+      if (options?.loading && !options?.stream) {
+        return window["addSystemNote"](message, options);
+      }
+      systemNoteQueue.push({ message, options });
+      processSystemNoteQueue();
+      return null;
     }
   } catch (e) {
     // ignore
@@ -1223,6 +1464,14 @@ const clearDebateLoading = (payload) => {
   }
   setSystemNoteLoading(debateLoadingNote, false, "Debate started.");
   debateLoadingNote = null;
+};
+
+const clearSystemLoadingIndicators = () => {
+  if (!systemNotesContainer) {
+    return;
+  }
+  const loadingEntries = systemNotesContainer.querySelectorAll(".agent-speech.loading");
+  loadingEntries.forEach((entry) => entry.classList.remove("loading"));
 };
 
 const connectLiveStream = () => {
@@ -1267,7 +1516,11 @@ const connectLiveStream = () => {
   stream.addEventListener("system", (event) => {
     const data = JSON.parse(event.data);
     if (data.message) {
-      safeAddNote(data.message, { round: data.round });
+      safeAddNote(data.message, {
+        round: data.round,
+        loading: Boolean(data.loading),
+        stream: Boolean(data.stream),
+      });
     }
   });
 
@@ -1277,20 +1530,21 @@ const connectLiveStream = () => {
     if (roundId === null) {
       return;
     }
-    if (roundId > 0) {
-      resetCouncilRoundWindow();
+    if (String(data.label || "").trim().toLowerCase() === "verdict") {
+      roundTabLabels.set(roundId, "Verdict");
     }
+    clearSystemLoadingIndicators();
     if (councilHeaderEl) {
       councilHeaderEl.textContent = "Councill's messages";
     }
-    if (currentSystemRound !== null && currentSystemRound !== roundId) {
-      addCompletedRoundTab(currentSystemRound);
-    }
     currentSystemRound = roundId;
     ensureRoundContainer(roundId);
-    setActiveSystemRound(roundId);
+    ensureCouncilRoundContainer(roundId);
+    setActiveRound(roundId);
     if (roundId === 0 && !councilsBooted) {
       setRoundBeginControl(0, { booting: true });
+    } else if (String(data.label || "").trim().toLowerCase() === "verdict") {
+      setRoundBeginControl(null);
     } else {
       setRoundBeginControl(roundId);
     }
@@ -1298,6 +1552,7 @@ const connectLiveStream = () => {
 
   stream.addEventListener("panel_selected", (event) => {
     const data = JSON.parse(event.data);
+
     // Grey out benched states on the map
     if (data.benched) {
       data.benched.forEach((stateName) => {
@@ -1337,17 +1592,11 @@ const connectLiveStream = () => {
   });
 
   stream.addEventListener("rebuttal_selected", (event) => {
-    const data = JSON.parse(event.data);
-    if (data.rebuttal_panel) {
-      safeAddNote(`Rebuttal panel: ${data.rebuttal_panel.join(", ")}`);
-    }
+    JSON.parse(event.data);
   });
 
   stream.addEventListener("reply_selected", (event) => {
-    const data = JSON.parse(event.data);
-    if (data.reply_state) {
-      safeAddNote(`Right of Reply granted to: ${data.reply_state}`);
-    }
+    JSON.parse(event.data);
   });
 
   stream.addEventListener("agent", (event) => {
@@ -1375,18 +1624,27 @@ const connectLiveStream = () => {
 
   stream.addEventListener("council_end", (event) => {
     const data = JSON.parse(event.data);
+    const resultRoundId = normalizeRoundId(data.round);
     if (currentSystemRound !== null) {
       addCompletedRoundTab(currentSystemRound);
       setActiveSystemRound(currentSystemRound);
     }
     setRoundBeginControl(null);
     if (data.summary) {
-      safeAddNote(data.summary);
+      if (resultRoundId !== null) {
+        safeAddNote(data.summary, { round: resultRoundId });
+      } else {
+        safeAddNote(data.summary);
+      }
     }
     if (data.winner || data.loser) {
       const winner = data.winner ? `Winner: ${data.winner}` : "Winner: n/a";
       const loser = data.loser ? `Loser: ${data.loser}` : "Loser: n/a";
-      safeAddNote(`${winner}. ${loser}.`);
+      if (resultRoundId !== null) {
+        safeAddNote(`${winner}. ${loser}.`, { round: resultRoundId });
+      } else {
+        safeAddNote(`${winner}. ${loser}.`);
+      }
     }
 
     if (activeFeedCard) {
