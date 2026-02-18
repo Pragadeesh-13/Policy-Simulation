@@ -121,6 +121,12 @@ body {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.compact-mode-btn {
+  cursor: pointer;
+  color: var(--text);
+  text-transform: none;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 1.1fr 2fr 1.1fr;
@@ -132,6 +138,28 @@ body {
 
 .layout.feed-collapsed {
   grid-template-columns: 42px 2.1fr 1.2fr;
+}
+
+.layout.compact-mode {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.layout.compact-mode #feed-list,
+.layout.compact-mode .map {
+  display: none;
+}
+
+.layout.compact-mode #deliberation-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding-right: 0;
+}
+
+.layout.compact-mode #deliberation-list .chat-pane-system,
+.layout.compact-mode #deliberation-list .chat-pane-council {
+  flex: 1 1 auto;
 }
 
 .panel {
@@ -493,6 +521,7 @@ body {
   background: transparent;
   height: 100%;
   overflow-y: auto;
+  gap: 20px;
 }
 
 .system-notes {
@@ -860,6 +889,28 @@ body {
   margin-top: 4px;
 }
 
+.council-box .section-header {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border-bottom: none;
+}
+
+.council-empty-state {
+  margin: 0 0 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-card.council-orchestrator {
+  margin: 0;
+}
+
 /* LLM-specific message styling */
 .llm-messages .agent-card {
   border-left: 3px solid rgba(125,211,252,0.10);
@@ -896,5 +947,9 @@ body {
   .llm-messages,
   .other-agents {
     gap: 10px;
+  }
+
+  .layout.compact-mode #deliberation-list {
+    grid-template-columns: 1fr;
   }
 }
