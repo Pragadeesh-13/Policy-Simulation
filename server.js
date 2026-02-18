@@ -1019,7 +1019,7 @@ const server = http.createServer((req, res) => {
         message: "Connected to council stream.",
         provider: "newsapi",
         model: LM_MODEL,
-        connection: "online",
+        connection: "connected",
       })}\n\n`
     );
     clients.add(res);

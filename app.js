@@ -175,6 +175,43 @@ let pendingCouncilCardTimers = [];
 let systemNotesContainer = null;
 let agentsContainer = null;
 
+// Toggle UI lock state for debate: adds/removes `debate-locked` on <body>
+const setDebateLocked = (locked) => {
+  try {
+    document.body.classList.toggle("debate-locked", Boolean(locked));
+  } catch (e) {
+    // ignore when body not present (safe-guard)
+  }
+  fetchLocked = Boolean(locked);
+  try {
+    if (topicInput) {
+      topicInput.disabled = Boolean(locked);
+      if (locked) {
+        topicInput.blur();
+        topicInput.setAttribute("aria-disabled", "true");
+      } else {
+        topicInput.removeAttribute("aria-disabled");
+      }
+    }
+  } catch (e) {
+    // ignore if DOM not ready
+  }
+};
+
+// Prevent clicks on topic text and start button while debate is locked
+document.addEventListener(
+  "click",
+  (e) => {
+    if (!fetchLocked) return;
+    const el = e.target;
+    if (el.closest && (el.closest("#fetch-next") || el.closest("#topic-text") || el.closest(".topic-pill"))) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  },
+  true
+);
+
 const isNearTop = (element, threshold = 80) => {
   if (!element) {
     return true;
@@ -336,7 +373,7 @@ const createWaitingCard = () => {
     <div class="feed-card__header">
       <span class="badge">Active</span>
     </div>
-    <h3>Waiting for live news...</h3>
+    <h3>Waiting for news...</h3>
     <p>System • now</p>
   `;
   return card;
@@ -501,7 +538,7 @@ const createBootingCard = () => {
     <div>
       <div class="agent-name">Council booting...</div>
       <div class="agent-speech-list">
-        <div class="agent-speech">Waiting for live debate signal.</div>
+        <div class="agent-speech">Waiting for debate signal.</div>
       </div>
     </div>
   `;
@@ -747,19 +784,19 @@ const clearDebateLoading = (payload) => {
 
 const connectLiveStream = () => {
   if (!window.EventSource) {
-    addSystemNote("Live updates unsupported in this browser.");
+    addSystemNote("Updates unsupported in this browser.");
     return;
   }
 
   const stream = new EventSource("/api/stream");
   stream.addEventListener("open", () => {
-    setTopic("Connected. Awaiting live update");
-    setStatusText(statusConnection, "online");
+    setTopic("Connected. Awaiting update");
+    setStatusText(statusConnection, "connected");
   });
 
   stream.addEventListener("topic", (event) => {
     const data = JSON.parse(event.data);
-    setTopic(data.title || "Live update");
+    setTopic(data.title || "Update");
   });
 
   stream.addEventListener("feed", (event) => {
@@ -776,6 +813,8 @@ const connectLiveStream = () => {
     stateImpact.clear();
     resetCouncilDelayed(data.agents || [], 2000);
     debateLoadingNote = addSystemNote("Beginning the debate...", { loading: true });
+    // lock UI interactions while debate runs
+    setDebateLocked(true);
   });
 
   stream.addEventListener("system", (event) => {
@@ -909,11 +948,12 @@ const connectLiveStream = () => {
       setStateImpact(data.loser, "negative");
     }
 
-    fetchLocked = false;
+    // unlock UI
+    setDebateLocked(false);
     if (fetchNextBtn) {
       fetchNextBtn.disabled = false;
       fetchNextBtn.classList.remove("is-loading");
-      fetchNextBtn.textContent = "Fetch next";
+      fetchNextBtn.textContent = "Start Debate";
     }
   });
 
@@ -934,7 +974,7 @@ const connectLiveStream = () => {
   });
 
   stream.addEventListener("error", () => {
-    addSystemNote("Live stream disconnected. Retrying...");
+    addSystemNote("Stream disconnected. Retrying...");
     setStatusText(statusConnection, "reconnecting");
   });
 };
@@ -945,9 +985,10 @@ if (fetchNextBtn) {
       return;
     }
     fetchLocked = true;
+    setDebateLocked(true);
     fetchNextBtn.disabled = true;
     fetchNextBtn.classList.add("is-loading");
-    fetchNextBtn.textContent = "Fetching...";
+    fetchNextBtn.textContent = "Starting Debate";
     stateLayer.eachLayer((layer) => {
       layer.getElement()?.classList.remove("active");
       layer.setStyle(baseStateStyle);
@@ -961,10 +1002,10 @@ if (fetchNextBtn) {
         body: JSON.stringify({ query }),
       });
     } catch (error) {
-      fetchLocked = false;
+      setDebateLocked(false);
       fetchNextBtn.disabled = false;
       fetchNextBtn.classList.remove("is-loading");
-      fetchNextBtn.textContent = "Fetch next";
+      fetchNextBtn.textContent = "Start Debate";
       addSystemNote("Failed to fetch next news item.");
     }
   });

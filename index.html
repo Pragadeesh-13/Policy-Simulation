@@ -21,16 +21,13 @@
   <body>
     <div class="frame">
       <header class="topbar">
-        <div class="topbar__left">LIVE FEED</div>
         <div class="topic-pill">
           <span class="dot"></span>
-          <span id="topic-text">Current Topic: Awaiting live update</span>
+          <span id="topic-text">Current Topic: Awaiting update</span>
         </div>
         <div class="topbar__right">
           COUNCIL DELIBERATION
-          <span class="live-badge">Live</span>
           <div class="status-strip" aria-live="polite">
-            <span class="status-item" id="status-connection">offline</span>
             <span class="status-item" id="status-provider">news: n/a</span>
             <span class="status-item" id="status-model">model: n/a</span>
           </div>
@@ -47,13 +44,13 @@
               placeholder="Type a debate topic..."
               aria-label="Debate topic"
             />
-            <button class="feed-btn" id="fetch-next" type="button">Fetch next</button>
+            <button class="feed-btn" id="fetch-next" type="button">Start Debate</button>
           </div>
           <div class="feed-card active" id="active-feed-card">
             <div class="feed-card__header">
               <span class="badge">Active</span>
             </div>
-            <h3>Waiting for live news...</h3>
+            <h3>Waiting for news...</h3>
             <p>System &bull; now</p>
           </div>
         </section>
@@ -69,7 +66,7 @@
             <div class="agent-avatar"></div>
             <div>
               <div class="agent-name">Council booting...</div>
-              <div class="agent-speech">Waiting for live debate signal.</div>
+                <div class="agent-speech">Waiting for debate signal.</div>
             </div>
           </div>
         </section>

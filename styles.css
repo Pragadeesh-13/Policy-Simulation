@@ -39,22 +39,26 @@ body {
 
 .topbar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  padding: 16px 24px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--panel-border);
   background: rgba(0, 0, 0, 0.6);
   font-family: "Poppins", sans-serif;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   font-size: 12px;
 }
 
 .topbar__left,
 .topbar__right {
-  opacity: 0.85;
+  opacity: 0.95;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.topbar__left:empty {
+  display: none;
 }
 
 .topbar__right {
@@ -73,6 +77,22 @@ body {
   font-size: 11px;
 }
 
+.topic-pill {
+  justify-self: center;
+}
+
+/* While a debate is running, show a not-allowed cursor for the topic and start button */
+.debate-locked .feed-btn,
+.debate-locked .topic-pill,
+.debate-locked #topic-text {
+  cursor: not-allowed;
+}
+
+/* Also show forbidden cursor for the topic input and prevent pointer events */
+.debate-locked #topic-input {
+  cursor: not-allowed;
+}
+
 .dot {
   width: 7px;
   height: 7px;
@@ -81,14 +101,7 @@ body {
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
 }
 
-.live-badge {
-  margin-left: 10px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  font-size: 10px;
-  text-transform: uppercase;
-}
+
 
 .status-strip {
   display: flex;
