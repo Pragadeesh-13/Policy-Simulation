@@ -166,6 +166,7 @@ const statusConnection = document.getElementById("status-connection");
 const statusProvider = document.getElementById("status-provider");
 const statusModel = document.getElementById("status-model");
 const statusStrip = statusModel?.parentElement || null;
+const topbarRight = document.querySelector(".topbar__right");
 const fetchNextBtn = document.getElementById("fetch-next");
 const topicInput = document.getElementById("topic-input");
 const stateImpact = new Map();
@@ -249,7 +250,8 @@ const setCompactMode = (enabled) => {
 };
 
 const initCompactModeToggle = () => {
-  if (!statusStrip || !layoutElement || statusStrip.querySelector(".compact-mode-btn")) {
+  const compactContainer = topbarRight || statusStrip;
+  if (!compactContainer || !layoutElement || compactContainer.querySelector(".compact-mode-btn")) {
     return;
   }
   const button = document.createElement("button");
@@ -261,7 +263,7 @@ const initCompactModeToggle = () => {
     const enabled = layoutElement.classList.contains("compact-mode");
     setCompactMode(!enabled);
   });
-  statusStrip.appendChild(button);
+  compactContainer.appendChild(button);
   compactModeBtn = button;
 };
 
