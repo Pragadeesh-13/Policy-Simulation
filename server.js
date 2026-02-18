@@ -92,6 +92,8 @@ let councilRunning = false;
 let lastStatusMessage = "";
 let lastStatusAt = 0;
 const pendingStories = [];
+const pendingRoundBegins = new Set();
+const roundBeginWaiters = new Map();
 
 if (typeof fetch !== "function") {
   console.error("Node 18+ is required for fetch support.");
@@ -116,6 +118,45 @@ const notifyStatus = (message) => {
   lastStatusMessage = message;
   lastStatusAt = now;
   sendEvent("status", { message });
+};
+
+const normalizeRoundNumber = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return Math.trunc(parsed);
+};
+
+const waitForRoundBegin = (round) => {
+  const roundId = normalizeRoundNumber(round);
+  if (roundId === null) {
+    return Promise.resolve();
+  }
+  if (pendingRoundBegins.has(roundId)) {
+    pendingRoundBegins.delete(roundId);
+    return Promise.resolve();
+  }
+  notifyStatus(`Waiting for user to begin round ${roundId}.`);
+  return new Promise((resolve) => {
+    roundBeginWaiters.set(roundId, resolve);
+  });
+};
+
+const markRoundBegun = (round) => {
+  const roundId = normalizeRoundNumber(round);
+  if (roundId === null) {
+    return { ok: false, round: null };
+  }
+  const waiter = roundBeginWaiters.get(roundId);
+  if (waiter) {
+    roundBeginWaiters.delete(roundId);
+    waiter();
+  } else {
+    pendingRoundBegins.add(roundId);
+  }
+  notifyStatus(`Round ${roundId} started.`);
+  return { ok: true, round: roundId };
 };
 
 const pickStoryId = (story) => story.url || `${story.title}-${story.publishedAt || ""}`;
@@ -757,6 +798,8 @@ const getCouncilVerdict = async (story, transcript, states) => {
 const runCouncil = async (story) => {
   if (councilRunning) return;
   councilRunning = true;
+  pendingRoundBegins.clear();
+  roundBeginWaiters.clear();
 
   const allAgents = buildAgentRoster();
   const allStates = allAgents.map((a) => a.state);
@@ -771,8 +814,10 @@ const runCouncil = async (story) => {
   console.log("\n═══ ROUND 0: IMPACT DECLARATIONS ═══");
   sendEvent("round_start", { round: 0, label: "Impact Declarations", count: allAgents.length });
   sendEvent("system", {
+    round: 0,
     message: `ROUND 0 — IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this news affects them.`,
   });
+  await waitForRoundBegin(0);
 
   const declarations = [];
   for (const agent of allAgents) {
@@ -787,6 +832,7 @@ const runCouncil = async (story) => {
   /* ─── SELECTION: Pick top panel ───────────────────────── */
   console.log("\n═══ SELECTION: Moderator analyzing declarations ═══");
   sendEvent("system", {
+    round: 1,
     message: `SELECTION — Moderator is analyzing declarations to select the top ${PANEL_SIZE} states...`,
   });
 
@@ -817,6 +863,7 @@ const runCouncil = async (story) => {
 
   sendEvent("panel_selected", { selected: selectedStates, benched: benchedStates });
   sendEvent("system", {
+    round: 1,
     message: `PANEL SELECTED: ${selectedStates.join(", ")}\nBenched: ${benchedStates.join(", ")}`,
   });
 
@@ -833,8 +880,10 @@ const runCouncil = async (story) => {
     order: shuffledPanel.map((a) => a.state),
   });
   sendEvent("system", {
+    round: 1,
     message: `ROUND 1 — OPENING STATEMENTS\nSpeaking order: ${shuffledPanel.map((a) => a.state).join(" → ")}`,
   });
+  await waitForRoundBegin(1);
 
   const round1Speeches = [];
   for (const agent of shuffledPanel) {
@@ -849,6 +898,7 @@ const runCouncil = async (story) => {
   /* ─── ROUND 2: Rebuttals (narrowed panel) ─────────────── */
   console.log("\n═══ ROUND 2: REBUTTALS ═══");
   sendEvent("system", {
+    round: 2,
     message: `SELECTION — Moderator is selecting ${REBUTTAL_SIZE} states for the rebuttal round...`,
   });
 
@@ -866,8 +916,10 @@ const runCouncil = async (story) => {
     order: rebuttalAgents.map((a) => a.state),
   });
   sendEvent("system", {
+    round: 2,
     message: `ROUND 2 — REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will debate.`,
   });
+  await waitForRoundBegin(2);
 
   const round2Speeches = [];
   for (const agent of rebuttalAgents) {
@@ -882,6 +934,7 @@ const runCouncil = async (story) => {
   /* ─── ROUND 3: Right of Reply (1 state) ───────────────── */
   console.log("\n═══ ROUND 3: RIGHT OF REPLY ═══");
   sendEvent("system", {
+    round: 3,
     message: "SELECTION — Moderator is identifying the most attacked state for Right of Reply...",
   });
 
@@ -898,8 +951,10 @@ const runCouncil = async (story) => {
       order: [replyStateName],
     });
     sendEvent("system", {
+      round: 3,
       message: `ROUND 3 — RIGHT OF REPLY\n${replyStateName} has the final word.`,
     });
+    await waitForRoundBegin(3);
 
     const { messages, maxTokens } = buildReplyPrompt(replyAgent, story, transcript);
     const message = await agentSpeak(replyAgent, messages, maxTokens, 3, "Right of Reply");
@@ -1042,6 +1097,22 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === "/api/news") {
     safeJson(res, 200, { story: latestStory });
+    return;
+  }
+
+  if (url.pathname === "/api/round/begin" && req.method === "POST") {
+    readJsonBody(req)
+      .then((body) => {
+        const result = markRoundBegun(body?.round);
+        if (!result.ok) {
+          safeJson(res, 400, { ok: false, error: "Invalid round number" });
+          return;
+        }
+        safeJson(res, 200, { ok: true, round: result.round });
+      })
+      .catch(() => {
+        safeJson(res, 500, { ok: false, error: "Failed to begin round" });
+      });
     return;
   }
 

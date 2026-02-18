@@ -159,6 +159,7 @@ resizeObserver.observe(mapContainer);
 
 const feedList = document.getElementById("feed-list");
 const deliberationList = document.getElementById("deliberation-list");
+const layoutElement = document.querySelector(".layout");
 const topicText = document.getElementById("topic-text");
 const agentCards = new Map();
 const statusConnection = document.getElementById("status-connection");
@@ -172,8 +173,87 @@ let debateLoadingNote = null;
 let activeFeedCard = null;
 let fetchLocked = false;
 let pendingCouncilCardTimers = [];
+let debateRunningTimer = null;
 let systemNotesContainer = null;
 let agentsContainer = null;
+let llmMessagesContainer = null;
+let otherAgentsContainer = null;
+let councilHeaderEl = null;
+let systemPanelContainer = null;
+let councilPanelContainer = null;
+let systemRoundTabsContainer = null;
+let systemRoundControlsContainer = null;
+let systemRoundViewsContainer = null;
+let systemGeneralMessagesContainer = null;
+let systemMessagesScrollContainer = null;
+let activeSystemRound = null;
+let currentSystemRound = null;
+const roundContainers = new Map();
+
+const setFeedCollapsed = (collapsed) => {
+  if (!layoutElement || !feedList) {
+    return;
+  }
+  layoutElement.classList.toggle("feed-collapsed", Boolean(collapsed));
+  const toggleBtn = feedList.querySelector(".feed-collapse-btn");
+  if (toggleBtn) {
+    toggleBtn.classList.toggle("is-collapsed", Boolean(collapsed));
+    toggleBtn.classList.toggle("is-expanded", !collapsed);
+    toggleBtn.setAttribute("aria-label", collapsed ? "Expand feed panel" : "Collapse feed panel");
+    toggleBtn.setAttribute("title", collapsed ? "Expand feed panel" : "Collapse feed panel");
+  }
+  setTimeout(() => {
+    try {
+      map.invalidateSize();
+    } catch (e) {
+      // ignore
+    }
+  }, 120);
+};
+
+const initFeedCollapseToggle = () => {
+  if (!feedList || !layoutElement || feedList.querySelector(".feed-collapse-btn")) {
+    return;
+  }
+  const controls = feedList.querySelector(".feed-controls");
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "feed-collapse-btn";
+  toggleBtn.setAttribute("aria-label", "Collapse feed panel");
+  toggleBtn.setAttribute("title", "Collapse feed panel");
+  toggleBtn.addEventListener("click", () => {
+    const collapsed = layoutElement.classList.contains("feed-collapsed");
+    setFeedCollapsed(!collapsed);
+  });
+  if (controls) {
+    controls.appendChild(toggleBtn);
+  } else {
+    feedList.appendChild(toggleBtn);
+  }
+  setFeedCollapsed(layoutElement.classList.contains("feed-collapsed"));
+};
+
+const stopDebateRunningIndicator = () => {
+  if (debateRunningTimer) {
+    clearInterval(debateRunningTimer);
+    debateRunningTimer = null;
+  }
+};
+
+const startDebateRunningIndicator = () => {
+  if (!fetchNextBtn) {
+    return;
+  }
+  stopDebateRunningIndicator();
+  let frame = 1;
+  const render = () => {
+    const dots = ".".repeat(frame);
+    fetchNextBtn.textContent = `Debate running${dots}`;
+    frame = frame >= 3 ? 1 : frame + 1;
+  };
+  render();
+  debateRunningTimer = setInterval(render, 420);
+};
 
 // Toggle UI lock state for debate: adds/removes `debate-locked` on <body>
 const setDebateLocked = (locked) => {
@@ -226,36 +306,228 @@ const scrollToTop = (element) => {
   element.scrollTop = 0;
 };
 
+initFeedCollapseToggle();
+
+const ensureDeliberationPanels = () => {
+  if (
+    systemPanelContainer &&
+    councilPanelContainer &&
+    systemPanelContainer.parentElement === deliberationList &&
+    councilPanelContainer.parentElement === deliberationList
+  ) {
+    return;
+  }
+  deliberationList.innerHTML = "";
+
+  const top = document.createElement("div");
+  top.className = "chat-pane chat-pane-system";
+
+  const bottom = document.createElement("div");
+  bottom.className = "chat-pane chat-pane-council";
+
+  deliberationList.appendChild(top);
+  deliberationList.appendChild(bottom);
+
+  systemPanelContainer = top;
+  councilPanelContainer = bottom;
+};
+
+const setActiveSystemRound = (roundId) => {
+  roundContainers.forEach((entry, id) => {
+    if (entry.view) {
+      entry.view.classList.toggle("active", id === roundId);
+    }
+    if (entry.tab) {
+      entry.tab.classList.toggle("active", id === roundId);
+    }
+  });
+  activeSystemRound = roundId;
+};
+
+const addCompletedRoundTab = (roundId) => {
+  const round = roundContainers.get(roundId);
+  if (!round || round.tab || !systemRoundTabsContainer) {
+    return;
+  }
+  const tab = document.createElement("button");
+  tab.className = "system-round-tab";
+  tab.textContent = `Round ${roundId}`;
+  tab.addEventListener("click", () => {
+    setActiveSystemRound(roundId);
+  });
+  systemRoundTabsContainer.appendChild(tab);
+  round.tab = tab;
+};
+
+const ensureRoundContainer = (round) => {
+  const roundId = normalizeRoundId(round);
+  if (roundId === null) {
+    return null;
+  }
+  ensureSystemNotesContainer();
+  if (roundContainers.has(roundId)) {
+    return roundContainers.get(roundId);
+  }
+
+  const view = document.createElement("div");
+  view.className = "system-round-view";
+  view.dataset.round = String(roundId);
+  systemRoundViewsContainer.appendChild(view);
+
+  const payload = { roundId, view, tab: null };
+  roundContainers.set(roundId, payload);
+  return payload;
+};
+
+const setRoundBeginControl = (roundId) => {
+  ensureSystemNotesContainer();
+  if (!systemRoundControlsContainer) {
+    return;
+  }
+  systemRoundControlsContainer.innerHTML = "";
+  if (roundId === null || roundId === undefined) {
+    return;
+  }
+
+  const btn = document.createElement("button");
+  btn.className = "begin-round-btn";
+  btn.textContent = `Begin round ${roundId}`;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.classList.add("disabled");
+    btn.textContent = `Round ${roundId} started`;
+    if (roundId === 0 && fetchNextBtn) {
+      startDebateRunningIndicator();
+      fetchNextBtn.classList.remove("is-loading");
+      fetchNextBtn.disabled = true;
+    }
+    try {
+      await fetch(`/api/round/begin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ round: roundId }),
+      });
+    } catch (e) {
+      // keep UI state; server will remain waiting until successful call
+    }
+  });
+
+  systemRoundControlsContainer.appendChild(btn);
+};
+
 const ensureSystemNotesContainer = () => {
-  if (systemNotesContainer && systemNotesContainer.parentElement === deliberationList) {
+  ensureDeliberationPanels();
+  if (systemNotesContainer && systemNotesContainer.parentElement === systemPanelContainer) {
     return systemNotesContainer;
   }
+
   const container = document.createElement("div");
   container.className = "system-notes";
-  deliberationList.prepend(container);
+
+  const header = document.createElement("div");
+  header.className = "section-header";
+  header.textContent = "System Messages";
+
+  const headerRow = document.createElement("div");
+  headerRow.className = "system-header-row";
+
+  const tabs = document.createElement("div");
+  tabs.className = "system-round-tabs";
+
+  const controls = document.createElement("div");
+  controls.className = "system-round-controls";
+
+  const general = document.createElement("div");
+  general.className = "system-general-messages";
+
+  const views = document.createElement("div");
+  views.className = "system-round-views";
+
+  const messagesScroll = document.createElement("div");
+  messagesScroll.className = "system-messages-scroll";
+
+  headerRow.appendChild(header);
+  headerRow.appendChild(controls);
+  messagesScroll.appendChild(general);
+  messagesScroll.appendChild(views);
+
+  container.appendChild(headerRow);
+  container.appendChild(tabs);
+  container.appendChild(messagesScroll);
+
+  systemPanelContainer.appendChild(container);
+
   systemNotesContainer = container;
+  systemRoundTabsContainer = tabs;
+  systemRoundControlsContainer = controls;
+  systemGeneralMessagesContainer = general;
+  systemRoundViewsContainer = views;
+  systemMessagesScrollContainer = messagesScroll;
+
   return container;
 };
 
 const ensureAgentsContainer = () => {
-  if (agentsContainer && agentsContainer.parentElement === deliberationList) {
+  ensureDeliberationPanels();
+  if (agentsContainer && agentsContainer.parentElement === councilPanelContainer) {
     return agentsContainer;
   }
   const container = document.createElement("div");
-  container.className = "agent-list";
-  const systemContainer = ensureSystemNotesContainer();
-  if (systemContainer.nextSibling) {
-    deliberationList.insertBefore(container, systemContainer.nextSibling);
-  } else {
-    deliberationList.appendChild(container);
-  }
+  container.className = "agent-list council-box";
+  const header = document.createElement("div");
+  header.className = "section-header";
+  header.textContent = "LLM Council";
+  container.appendChild(header);
+
+  // subcontainers: LLM-specific messages and other agents
+  const llm = document.createElement("div");
+  llm.className = "llm-messages";
+  container.appendChild(llm);
+  const others = document.createElement("div");
+  others.className = "other-agents";
+  container.appendChild(others);
+
+  councilPanelContainer.appendChild(container);
+
   agentsContainer = container;
+  llmMessagesContainer = llm;
+  otherAgentsContainer = others;
+  councilHeaderEl = header;
   return container;
 };
 
+const resetCouncilRoundWindow = () => {
+  pendingCouncilCardTimers.forEach((timer) => clearTimeout(timer));
+  pendingCouncilCardTimers = [];
+  agentCards.clear();
+  agentStreamEntries.clear();
+  if (llmMessagesContainer) {
+    llmMessagesContainer.innerHTML = "";
+  }
+  if (otherAgentsContainer) {
+    otherAgentsContainer.innerHTML = "";
+  }
+};
+
+const normalizeRoundId = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.trunc(parsed);
+};
+
 const insertAgentCard = (card) => {
-  const container = ensureAgentsContainer();
-  container.appendChild(card);
+  ensureAgentsContainer();
+  // tag cards with their agent name when available
+  const agentName = card.dataset.agentName || "";
+  if (agentName && agentName.toLowerCase() === "llm") {
+    if (llmMessagesContainer) llmMessagesContainer.appendChild(card);
+    else agentsContainer.appendChild(card);
+  } else {
+    if (otherAgentsContainer) otherAgentsContainer.appendChild(card);
+    else agentsContainer.appendChild(card);
+  }
 };
 
 const STATE_AVATAR_STYLES = {
@@ -504,6 +776,8 @@ const setStateImpact = (stateName, impact) => {
 const createAgentCard = (agent) => {
   const card = document.createElement("div");
   card.className = "agent-card";
+  // tag card with agent name for routing (e.g., LLM)
+  card.dataset.agentName = agent?.name || "Council";
   if (agent?.name === "System") {
     card.classList.add("system");
   }
@@ -545,6 +819,21 @@ const createBootingCard = () => {
   return card;
 };
 
+const markCouncilBooted = () => {
+  const booting = document.getElementById("booting-card");
+  if (!booting) {
+    return;
+  }
+  const nameEl = booting.querySelector(".agent-name");
+  const speechEl = booting.querySelector(".agent-speech");
+  if (nameEl) {
+    nameEl.textContent = "Council booted..";
+  }
+  if (speechEl) {
+    speechEl.textContent = "All councils loaded and ready.";
+  }
+};
+
 const removeBootingCard = () => {
   const booting = document.getElementById("booting-card");
   if (booting) {
@@ -576,6 +865,19 @@ const resetCouncil = (agents = []) => {
   agentStreamEntries.clear();
   systemNotesContainer = null;
   agentsContainer = null;
+  llmMessagesContainer = null;
+  otherAgentsContainer = null;
+  councilHeaderEl = null;
+  systemPanelContainer = null;
+  councilPanelContainer = null;
+  systemRoundTabsContainer = null;
+  systemRoundControlsContainer = null;
+  systemRoundViewsContainer = null;
+  systemGeneralMessagesContainer = null;
+  systemMessagesScrollContainer = null;
+  activeSystemRound = null;
+  currentSystemRound = null;
+  roundContainers.clear();
   ensureSystemNotesContainer();
   ensureAgentsContainer();
   agents.forEach((agent) => {
@@ -598,9 +900,23 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
   pendingCouncilCardTimers = [];
   systemNotesContainer = null;
   agentsContainer = null;
+  llmMessagesContainer = null;
+  otherAgentsContainer = null;
+  councilHeaderEl = null;
+  systemPanelContainer = null;
+  councilPanelContainer = null;
+  systemRoundTabsContainer = null;
+  systemRoundControlsContainer = null;
+  systemRoundViewsContainer = null;
+  systemGeneralMessagesContainer = null;
+  systemMessagesScrollContainer = null;
+  activeSystemRound = null;
+  currentSystemRound = null;
+  roundContainers.clear();
   ensureSystemNotesContainer();
   ensureAgentsContainer();
   insertAgentCard(createBootingCard());
+  let loadedCount = 0;
   agents.forEach((agent, index) => {
     const timer = setTimeout(() => {
       if (agentCards.has(agent.name)) {
@@ -614,6 +930,10 @@ const resetCouncilDelayed = (agents = [], delayMs = 2000) => {
       });
       agentCards.set(agent.name, card);
       insertAgentCard(card);
+      loadedCount += 1;
+      if (loadedCount >= agents.length) {
+        markCouncilBooted();
+      }
     }, delayMs * (index + 1));
     pendingCouncilCardTimers.push(timer);
   });
@@ -684,6 +1004,7 @@ const upsertAgentMessage = (payload) => {
     agentCards.set(name, card);
     insertAgentCard(card);
   } else {
+    {
     const speechList = card.querySelector(".agent-speech-list");
     const nameEl = card.querySelector(".agent-name");
     const avatarEl = card.querySelector(".agent-avatar");
@@ -710,6 +1031,7 @@ const upsertAgentMessage = (payload) => {
       card.classList.add(`team-${getStateTeam(payload.state)}`);
     }
     card.classList.remove("muted");
+    }
   }
   removeBootingCard();
   removeStandingBy(card);
@@ -744,12 +1066,43 @@ const addSystemNote = (message, options = {}) => {
       entry.classList.add("loading");
     }
   }
-  const container = ensureSystemNotesContainer();
-  container.prepend(note);
-  if (isNearTop(deliberationList)) {
-    scrollToTop(deliberationList);
+  const roundId = normalizeRoundId(options.round);
+  if (roundId !== null) {
+    const round = ensureRoundContainer(roundId);
+    round?.view.append(note);
+    if (activeSystemRound === null) {
+      setActiveSystemRound(roundId);
+    }
+  } else {
+    ensureSystemNotesContainer();
+    systemGeneralMessagesContainer?.append(note);
+  }
+  if (isNearTop(systemMessagesScrollContainer)) {
+    scrollToTop(systemMessagesScrollContainer);
   }
   return note;
+};
+// expose for handlers that may run later or from other scopes
+try {
+  if (typeof window !== "undefined") {
+    window.addSystemNote = addSystemNote;
+  }
+} catch (e) {
+  // ignore
+}
+
+// safe wrapper that uses the window property to avoid ReferenceErrors
+const safeAddNote = (message, options = {}) => {
+  try {
+    if (typeof window !== "undefined" && typeof window["addSystemNote"] === "function") {
+      return window["addSystemNote"](message, options);
+    }
+  } catch (e) {
+    // ignore
+  }
+  try {
+    console.warn("[SYS NOTE]", message);
+  } catch (e) {}
 };
 
 const setSystemNoteLoading = (note, isLoading, message) => {
@@ -784,7 +1137,7 @@ const clearDebateLoading = (payload) => {
 
 const connectLiveStream = () => {
   if (!window.EventSource) {
-    addSystemNote("Updates unsupported in this browser.");
+    safeAddNote("Updates unsupported in this browser.");
     return;
   }
 
@@ -812,7 +1165,11 @@ const connectLiveStream = () => {
     });
     stateImpact.clear();
     resetCouncilDelayed(data.agents || [], 2000);
-    debateLoadingNote = addSystemNote("Beginning the debate...", { loading: true });
+    if (councilHeaderEl) {
+      councilHeaderEl.textContent = "LLM Council — Round 0";
+    }
+    setRoundBeginControl(null);
+    debateLoadingNote = safeAddNote("Beginning the debate...", { loading: true });
     // lock UI interactions while debate runs
     setDebateLocked(true);
   });
@@ -820,19 +1177,29 @@ const connectLiveStream = () => {
   stream.addEventListener("system", (event) => {
     const data = JSON.parse(event.data);
     if (data.message) {
-      addSystemNote(data.message);
+      safeAddNote(data.message, { round: data.round });
     }
   });
 
   stream.addEventListener("round_start", (event) => {
     const data = JSON.parse(event.data);
-    const label = data.label || `Round ${data.round}`;
-    const count = data.count || "?";
-    const order = data.order ? data.order.join(" → ") : "";
-    const message = order
-      ? `── ${label} (${count} speakers) ──\nOrder: ${order}`
-      : `── ${label} (${count} speakers) ──`;
-    addSystemNote(message);
+    const roundId = normalizeRoundId(data.round);
+    if (roundId === null) {
+      return;
+    }
+    if (roundId > 0) {
+      resetCouncilRoundWindow();
+    }
+    if (councilHeaderEl) {
+      councilHeaderEl.textContent = `LLM Council — Round ${roundId}`;
+    }
+    if (currentSystemRound !== null && currentSystemRound !== roundId) {
+      addCompletedRoundTab(currentSystemRound);
+    }
+    currentSystemRound = roundId;
+    ensureRoundContainer(roundId);
+    setActiveSystemRound(roundId);
+    setRoundBeginControl(roundId);
   });
 
   stream.addEventListener("panel_selected", (event) => {
@@ -878,14 +1245,14 @@ const connectLiveStream = () => {
   stream.addEventListener("rebuttal_selected", (event) => {
     const data = JSON.parse(event.data);
     if (data.rebuttal_panel) {
-      addSystemNote(`Rebuttal panel: ${data.rebuttal_panel.join(", ")}`);
+      safeAddNote(`Rebuttal panel: ${data.rebuttal_panel.join(", ")}`);
     }
   });
 
   stream.addEventListener("reply_selected", (event) => {
     const data = JSON.parse(event.data);
     if (data.reply_state) {
-      addSystemNote(`Right of Reply granted to: ${data.reply_state}`);
+      safeAddNote(`Right of Reply granted to: ${data.reply_state}`);
     }
   });
 
@@ -914,13 +1281,18 @@ const connectLiveStream = () => {
 
   stream.addEventListener("council_end", (event) => {
     const data = JSON.parse(event.data);
+    if (currentSystemRound !== null) {
+      addCompletedRoundTab(currentSystemRound);
+      setActiveSystemRound(currentSystemRound);
+    }
+    setRoundBeginControl(null);
     if (data.summary) {
-      addSystemNote(data.summary);
+      safeAddNote(data.summary);
     }
     if (data.winner || data.loser) {
       const winner = data.winner ? `Winner: ${data.winner}` : "Winner: n/a";
       const loser = data.loser ? `Loser: ${data.loser}` : "Loser: n/a";
-      addSystemNote(`${winner}. ${loser}.`);
+      safeAddNote(`${winner}. ${loser}.`);
     }
 
     if (activeFeedCard) {
@@ -949,6 +1321,7 @@ const connectLiveStream = () => {
     }
 
     // unlock UI
+    stopDebateRunningIndicator();
     setDebateLocked(false);
     if (fetchNextBtn) {
       fetchNextBtn.disabled = false;
@@ -960,7 +1333,7 @@ const connectLiveStream = () => {
   stream.addEventListener("status", (event) => {
     const data = JSON.parse(event.data);
     if (data.message) {
-      addSystemNote(data.message);
+      safeAddNote(data.message);
     }
     if (data.provider) {
       setStatusText(statusProvider, `news: ${data.provider}`);
@@ -974,13 +1347,15 @@ const connectLiveStream = () => {
   });
 
   stream.addEventListener("error", () => {
-    addSystemNote("Stream disconnected. Retrying...");
+    safeAddNote("Stream disconnected. Retrying...");
     setStatusText(statusConnection, "reconnecting");
   });
 };
 
 if (fetchNextBtn) {
+  console.log("[BOOT] Start Debate button found, binding click handler");
   fetchNextBtn.addEventListener("click", async () => {
+    console.log("[UI] Start Debate clicked, fetchLocked=", fetchLocked);
     if (fetchLocked) {
       return;
     }
@@ -995,18 +1370,24 @@ if (fetchNextBtn) {
     });
     stateImpact.clear();
     try {
-      const query = topicInput?.value?.trim() || "";
+      let query = topicInput?.value?.trim() || "";
+      if (!query) {
+        query = "Top headlines India";
+        safeAddNote("No topic provided — fetching top headlines for India...", { loading: true });
+      }
+      setTopic(query);
       await fetch("/api/next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query }),
       });
     } catch (error) {
+      stopDebateRunningIndicator();
       setDebateLocked(false);
       fetchNextBtn.disabled = false;
       fetchNextBtn.classList.remove("is-loading");
       fetchNextBtn.textContent = "Start Debate";
-      addSystemNote("Failed to fetch next news item.");
+      safeAddNote("Failed to fetch next news item.");
     }
   });
 }

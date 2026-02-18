@@ -130,6 +130,10 @@ body {
   min-height: 0;
 }
 
+.layout.feed-collapsed {
+  grid-template-columns: 42px 2.1fr 1.2fr;
+}
+
 .panel {
   border: 1px solid var(--panel-border);
   border-radius: 16px;
@@ -147,11 +151,75 @@ body {
   overflow-y: auto;
   padding-right: 6px;
   min-height: 0;
+  position: relative;
+}
+
+.feed-collapse-btn {
+  position: static;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.feed-collapse-btn.is-expanded::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 8px solid rgba(230, 230, 230, 0.95);
+}
+
+.feed-collapse-btn.is-collapsed::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 0;
+  border-left: 8px solid rgba(230, 230, 230, 0.95);
+}
+
+.layout.feed-collapsed #feed-list {
+  padding: 8px 6px;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.layout.feed-collapsed #feed-list .feed-controls,
+.layout.feed-collapsed #feed-list .feed-card,
+.layout.feed-collapsed #feed-list .section-header,
+.layout.feed-collapsed #feed-list h3,
+.layout.feed-collapsed #feed-list p,
+.layout.feed-collapsed #feed-list .badge {
+  display: none;
+}
+
+.layout.feed-collapsed #feed-list .feed-controls {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.layout.feed-collapsed #feed-list .feed-controls .feed-input,
+.layout.feed-collapsed #feed-list .feed-controls .feed-btn {
+  display: none;
 }
 
 .feed-controls {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 12px;
 }
@@ -390,10 +458,26 @@ body {
 .deliberation {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  overflow-y: auto;
+  gap: 12px;
+  overflow: hidden;
   padding-right: 6px;
   min-height: 0;
+}
+
+.chat-pane {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.015);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-pane-system {
+  flex: 0 0 46%;
+}
+
+.chat-pane-council {
+  flex: 1;
 }
 
 .agent-list {
@@ -402,10 +486,108 @@ body {
   gap: 20px;
 }
 
+.council-box {
+  border: none;
+  border-radius: 0;
+  padding: 12px;
+  background: transparent;
+  height: 100%;
+  overflow-y: auto;
+}
+
 .system-notes {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+  height: 100%;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.system-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.system-header-row .section-header {
+  margin-bottom: 0;
+  padding: 0;
+  border-bottom: none;
+}
+
+.system-round-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.system-round-tab {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.system-round-tab.active {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.system-round-controls {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.system-round-controls .begin-round-btn {
+  border-radius: 999px;
+  padding: 7px 14px;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+
+.system-round-controls .begin-round-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.system-messages-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.system-general-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.system-round-views {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.system-round-view {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.system-round-view.active {
+  display: flex;
 }
 
 .agent-card {
@@ -514,26 +696,8 @@ body {
   background-position: center;
   background-repeat: no-repeat;
   color: #101010;
-  box-shadow:
-    0 0 14px rgba(125, 211, 252, 0.45),
-    0 0 22px rgba(196, 181, 253, 0.35),
-    0 0 30px rgba(249, 168, 212, 0.3);
-  animation: system-glow 2.6s ease-in-out infinite;
-}
-
-@keyframes system-glow {
-  0% {
-    transform: scale(1);
-    filter: saturate(1);
-  }
-  50% {
-    transform: scale(1.06);
-    filter: saturate(1.35);
-  }
-  100% {
-    transform: scale(1);
-    filter: saturate(1);
-  }
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.14);
+  animation: none;
 }
 
 .agent-name {
@@ -664,5 +828,73 @@ body {
   .topbar__left,
   .topbar__right {
     justify-content: center;
+  }
+}
+
+/* Section headers for system / LLM areas */
+.section-header {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 8px 0 6px;
+  border-bottom: 1px dashed rgba(255,255,255,0.04);
+  margin-bottom: 8px;
+}
+
+/* Containers for routed messages */
+.llm-messages,
+.other-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Slight visual difference for system notes */
+.system-notes .agent-card {
+  background: transparent;
+  border: none;
+}
+
+.agent-list .section-header {
+  margin-top: 4px;
+}
+
+/* LLM-specific message styling */
+.llm-messages .agent-card {
+  border-left: 3px solid rgba(125,211,252,0.10);
+  padding-left: 10px;
+}
+
+.other-agents .agent-card {
+  padding-left: 0;
+}
+
+.begin-round-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.begin-round-btn.disabled,
+.begin-round-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.round-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 980px) {
+  .section-header {
+    text-align: center;
+  }
+  .llm-messages,
+  .other-agents {
+    gap: 10px;
   }
 }
