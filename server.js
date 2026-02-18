@@ -403,13 +403,54 @@ const sanitizeModelOutput = (text) => {
   }
   // Strip hidden <thought> blocks
   let clean = text.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+  clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  clean = clean.replace(/<\/?(think|thought)>/gi, "").trim();
   // Strip markdown code fences
   clean = clean.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
   const lines = clean.split("\n");
-  while (lines.length && /^\s*(okay|sure|first|let me|i need to|here is)/i.test(lines[0])) {
+  while (
+    lines.length &&
+    /^\s*(okay|sure|first|let me|i need to|here is|i should|i will|to answer|analysis|i'm going to)/i.test(lines[0])
+  ) {
     lines.shift();
   }
   return lines.join("\n").trim();
+};
+
+const formatDebateSummary = (text) => {
+  const cleaned = sanitizeModelOutput(text);
+  if (!cleaned) {
+    return "";
+  }
+
+  const filteredLines = cleaned
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^[-•]\s*.+Council\s*\([^)]*\):/i.test(line))
+    .filter((line) => !/^[-•]\s*.+:\s*/.test(line))
+    .filter((line) => !/<\/?(think|thought)>/i.test(line));
+
+  const merged = filteredLines.join(" ").replace(/\s+/g, " ").trim();
+  if (!merged) {
+    return "Council reached no clear consensus.";
+  }
+
+  const sentences = merged.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const reasoningPattern =
+    /\b(i need to|let me|i should|i will|to answer|analysis|parse through|first,?\s*i|first,?\s*we)\b/i;
+  const contentSentences = sentences.filter((sentence) => !reasoningPattern.test(sentence));
+
+  if (contentSentences.length >= 2) {
+    return `${contentSentences[0]} ${contentSentences[1]}`.trim();
+  }
+  if (contentSentences.length === 1) {
+    return contentSentences[0].trim();
+  }
+  if (sentences.length >= 2) {
+    return `${sentences[0]} ${sentences[1]}`.trim();
+  }
+  return merged;
 };
 
 /* ─── Streaming with Thought Buffering ──────────────────── */
@@ -739,11 +780,51 @@ const getCouncilSummary = async (story, transcript) => {
       ],
       200
     );
-    return sanitizeModelOutput(response);
+    return formatDebateSummary(response);
   } catch (error) {
     console.error("Summary failed:", error.message);
     return "Council reached no clear consensus.";
   }
+};
+
+const getRoundSummary = async (story, roundLabel, roundTranscript) => {
+  if (!Array.isArray(roundTranscript) || !roundTranscript.length) {
+    return "";
+  }
+  const systemPrompt =
+    "You are Round Summary Agent. Summarize the round in 1-2 sentences. " +
+    "No <think> or <thought> tags. No markdown. No bullet points. No speaker list.";
+  const userPrompt =
+    `Story: ${story.title}\n` +
+    `Round: ${roundLabel}\n` +
+    `Round transcript:\n${buildTranscriptText(roundTranscript)}\n\n` +
+    "Return only the summary text.";
+  try {
+    const response = await callLmStudio(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      120
+    );
+    return formatDebateSummary(response);
+  } catch (error) {
+    console.error(`[ROUND SUMMARY] ${roundLabel} failed:`, error.message);
+    return "";
+  }
+};
+
+const emitRoundSummary = async (story, round, roundLabel, roundTranscript) => {
+  const summary = await getRoundSummary(story, roundLabel, roundTranscript);
+  if (!summary) {
+    return;
+  }
+  sendEvent("round_summary", {
+    round,
+    label: roundLabel,
+    agent: "Round Summary Agent",
+    message: summary,
+  });
 };
 
 const analyzeKeywords = (transcript, states) => {
@@ -828,6 +909,7 @@ const runCouncil = async (story) => {
     declarations.push(entry);
     await new Promise((r) => setTimeout(r, 300));
   }
+  await emitRoundSummary(story, 0, "Impact Declarations", declarations);
 
   /* ─── SELECTION: Pick top panel ───────────────────────── */
   console.log("\n═══ SELECTION: Moderator analyzing declarations ═══");
@@ -896,6 +978,7 @@ const runCouncil = async (story) => {
     round1Speeches.push(entry);
     await new Promise((r) => setTimeout(r, 400));
   }
+  await emitRoundSummary(story, 1, "Opening Statements", round1Speeches);
 
   /* ─── ROUND 2: Rebuttals (narrowed panel) ─────────────── */
   console.log("\n═══ ROUND 2: REBUTTALS ═══");
@@ -934,6 +1017,7 @@ const runCouncil = async (story) => {
     round2Speeches.push(entry);
     await new Promise((r) => setTimeout(r, 400));
   }
+  await emitRoundSummary(story, 2, "Rebuttals", round2Speeches);
 
   /* ─── ROUND 3: Right of Reply (1 state) ───────────────── */
   console.log("\n═══ ROUND 3: RIGHT OF REPLY ═══");
@@ -967,8 +1051,10 @@ const runCouncil = async (story) => {
 
     const { messages, maxTokens } = buildReplyPrompt(replyAgent, story, transcript);
     const message = await agentSpeak(replyAgent, messages, maxTokens, 3, "Right of Reply");
-    transcript.push({ agent: replyAgent.name, state: replyAgent.state, message, round: 3, label: "Right of Reply" });
+    const round3Entry = { agent: replyAgent.name, state: replyAgent.state, message, round: 3, label: "Right of Reply" };
+    transcript.push(round3Entry);
     await new Promise((r) => setTimeout(r, 400));
+    await emitRoundSummary(story, 3, "Right of Reply", [round3Entry]);
   }
 
   /* ─── Summary & Verdict ───────────────────────────────── */

@@ -654,7 +654,7 @@ const ensureAgentsContainer = () => {
   container.className = "agent-list council-box";
   const header = document.createElement("div");
   header.className = "section-header";
-  header.textContent = "Councill's messages";
+  header.textContent = "Council's messages";
   container.appendChild(header);
 
   const orchestrator = createAgentCard({
@@ -1178,8 +1178,7 @@ const upsertAgentStreamMessage = (payload) => {
   const streamKey = `${name}:${payload.round ?? ""}:${label}`;
   const hasMessage = Boolean(payload.message && payload.message.trim());
 
-  if (speechList && hasMessage) {
-    removeStandingBy(card);
+  if (speechList) {
     let entry = agentStreamEntries.get(streamKey);
     if (!entry) {
       entry = document.createElement("div");
@@ -1190,7 +1189,15 @@ const upsertAgentStreamMessage = (payload) => {
       speechList.appendChild(entry);
       agentStreamEntries.set(streamKey, entry);
     }
-    entry.textContent = `${roundLabel}${payload.message || ""}`;
+
+    if (hasMessage) {
+      removeStandingBy(card);
+      entry.classList.remove("loading");
+      entry.textContent = `${roundLabel}${payload.message || ""}`;
+    } else if (!entry.textContent || entry.classList.contains("loading")) {
+      entry.classList.add("loading");
+      entry.textContent = "Council member is thinking...";
+    }
   }
 
   if (nameEl && payload.state) {
@@ -1298,9 +1305,7 @@ const addSystemNote = (message, options = {}) => {
     ensureSystemNotesContainer();
     systemGeneralMessagesContainer?.append(note);
   }
-  if (isNearTop(systemMessagesScrollContainer)) {
-    scrollToTop(systemMessagesScrollContainer);
-  }
+  scrollToTop(systemMessagesScrollContainer);
   return note;
 };
 
@@ -1333,13 +1338,26 @@ const streamCardMessage = (card, message, options = {}) =>
     speechList.appendChild(currentEntry);
 
     const scrollContainer = options.scrollContainer || null;
+    let finished = false;
+    let timer = null;
+
+    const finishStream = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (timer) {
+        clearInterval(timer);
+      }
+      resolve(card);
+    };
 
     const step = () => {
       const line = lines[lineIndex] || "";
       if (charIndex <= line.length) {
         currentEntry.textContent = line.slice(0, charIndex);
         charIndex += 1;
-        if (scrollContainer && isNearTop(scrollContainer)) {
+        if (scrollContainer) {
           scrollToTop(scrollContainer);
         }
         return;
@@ -1348,7 +1366,7 @@ const streamCardMessage = (card, message, options = {}) =>
       currentEntry.classList.remove("system-streaming");
       lineIndex += 1;
       if (lineIndex >= lines.length) {
-        resolve(card);
+        finishStream();
         return;
       }
 
@@ -1361,12 +1379,7 @@ const streamCardMessage = (card, message, options = {}) =>
       speechList.appendChild(currentEntry);
     };
 
-    const timer = setInterval(() => {
-      step();
-      if (lineIndex >= lines.length) {
-        clearInterval(timer);
-      }
-    }, speed);
+    timer = setInterval(step, speed);
   });
 
 const streamSystemNote = (message, options = {}) =>
@@ -1505,7 +1518,7 @@ const connectLiveStream = () => {
     stateImpact.clear();
     resetCouncilDelayed(data.agents || [], 2000);
     if (councilHeaderEl) {
-      councilHeaderEl.textContent = "Councill's messages";
+      councilHeaderEl.textContent = "Council's messages";
     }
     setRoundBeginControl(null);
     debateLoadingNote = safeAddNote("Beginning the debate...", { loading: true });
@@ -1535,7 +1548,7 @@ const connectLiveStream = () => {
     }
     clearSystemLoadingIndicators();
     if (councilHeaderEl) {
-      councilHeaderEl.textContent = "Councill's messages";
+      councilHeaderEl.textContent = "Council's messages";
     }
     currentSystemRound = roundId;
     ensureRoundContainer(roundId);
@@ -1597,6 +1610,20 @@ const connectLiveStream = () => {
 
   stream.addEventListener("reply_selected", (event) => {
     JSON.parse(event.data);
+  });
+
+  stream.addEventListener("round_summary", (event) => {
+    const data = JSON.parse(event.data);
+    const isCompact = Boolean(layoutElement?.classList.contains("compact-mode"));
+    if (!isCompact || !data?.message) {
+      return;
+    }
+    const roundId = normalizeRoundId(data.round);
+    if (roundId === null) {
+      return;
+    }
+    const label = data.label || `Round ${roundId}`;
+    safeAddNote(`${label} Summary\n${data.message}`, { round: roundId });
   });
 
   stream.addEventListener("agent", (event) => {
