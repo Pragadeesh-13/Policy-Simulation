@@ -1,0 +1,150 @@
+# Council Deliberation — Project Documentation
+
+**Short summary**
+- Interactive demo that ingests news, runs a multi‑state "council" deliberation using a local LLM (LM Studio), and streams real‑time UI updates (map + council cards) via Server‑Sent Events (SSE).
+
+---
+
+## Quick start ✅
+1. Install & run:
+   - npm install (if you add deps) — project is minimal; start with:
+   - npm start
+2. Open: http://localhost:3000 (or the port in `PORT` env).
+3. Configure environment (recommended):
+   - set `NEWS_API_KEY` (NewsAPI.org) — replace the repo's placeholder.
+   - set `LMSTUDIO_URL` and `LMSTUDIO_API_KEY` if required by your LM Studio instance.
+   - optional: `LM_MODEL`, `PANEL_SIZE`, `REBUTTAL_SIZE`, `COUNCIL_STATES`, `PORT`.
+4. Quick test endpoints:
+   - Manual trigger: GET /api/trigger?title=Test
+   - Start next story: POST /api/next { query }
+   - SSE stream: open /api/stream in browser (EventSource).
+
+> ⚠️ Do not commit real API keys. Use environment variables for production.
+
+---
+
+## Architecture overview 🔧
+- Front-end: `index.html`, `app.js`, `styles.css` — UI, Leaflet map, SSE client, replay/streaming UI.
+- Back-end: `server.js` — static server + orchestration, NewsAPI fetcher, LM Studio client, SSE push.
+- Communication: Server‑Sent Events (`/api/stream`) for live updates; REST for control (`/api/next`, `/api/round/begin`, `/api/trigger`).
+- LLM integration: calls to LM Studio (`callLmStudio` and streaming `callLmStudioStream`) to run agent prompts.
+
+---
+
+## File map (what each file does)
+- `index.html` — single‑page UI; includes Leaflet and shpjs and loads `app.js`.
+- `styles.css` — complete UI styling and responsive layout.
+- `app.js` — all front-end logic:
+  - loads India shapefile, renders states with Leaflet
+  - UI: feed panel, deliberation panels, agent cards, round controls
+  - connects to SSE `/api/stream`, reacts to events (agent, system, round_start, etc.)
+  - provides controls: Start Debate (`/api/next`) and round begin (`/api/round/begin`).
+- `server.js` — server + orchestration:
+  - News fetching (`fetchNews`) using NewsAPI
+  - Council pipeline (`runCouncil`) implementing rounds 0–4
+  - LLM prompt builders and streaming handlers
+  - SSE endpoint `/api/stream` and REST endpoints
+- `package.json` — start script (`node server.js`).
+
+---
+
+## Important server endpoints (quick reference)
+- GET `/api/stream` — Server‑Sent Events; UI subscribes to it.
+- POST `/api/next` — enqueue / fetch next news item and start council flow.
+- POST `/api/round/begin` — user signals to begin a waiting round (used to step through rounds manually).
+- GET `/api/trigger?title=...` — manual story trigger for testing.
+- GET `/api/news` — returns the latest story object.
+
+---
+
+## The council pipeline (how debates proceed) — numbered steps
+1. Round 0 — Impact Declarations: every state agent gives a 1–2 sentence impact declaration.
+2. Selection — Moderator chooses a panel of `PANEL_SIZE` states from declarations.
+3. Round 1 — Opening statements: panel states make opening arguments.
+4. Round 2 — Rebuttals: `REBUTTAL_SIZE` states selected to rebut.
+5. Round 3 — Right of Reply: single state replies.
+6. Round 4 — Verdict & Summary: a short summary and a JSON verdict (winner/loser).
+
+- Implementation details:
+  - Prompts are generated in `server.js` (functions: `buildImpactPrompt`, `buildOpeningPrompt`, `buildRebuttalPrompt`, etc.).
+  - The server streams agent output via `agent_start` / `agent_delta` / `agent_end` SSE events.
+  - Thought buffering: model output may include `<thought>` blocks — server buffers inner thoughts and only exposes public text until thought is closed.
+  - Summaries and verdicts use dedicated summarization calls and fallback heuristics if LLM output cannot be parsed.
+
+---
+
+## Front-end behaviors & events (ui highlights)
+- Map: Leaflet renders India states from a remote shapefile; states are colored/animated depending on `positive` / `negative` impacts.
+- SSE events handled by `connectLiveStream()` in `app.js` include: `topic`, `feed`, `council_start`, `system`, `round_start`, `panel_selected`, `agent_start`, `agent_delta`, `agent_end`, `council_end`, etc.
+- UI controls:
+  - `Start Debate` (triggers `/api/next`)
+  - Round begin buttons (POST `/api/round/begin`) to step rounds manually — these now appear only after the system messages for that round finish streaming
+  - Feed cards and clickable story links
+  - Rounds no longer auto-navigate: the UI will mark the `current` round but the user must click the round tab or use the `Go to current round` control to view it.
+- Visuals: agent cards (team colors), system notes (streaming text), and an interactive map that highlights the active state.
+  - System-note loading spinners are cleared automatically once a streaming system message finishes to avoid indefinite spinners.
+  - When the moderator/system is streaming messages for the next round, the **Council Orchestrator** card displays a "Waiting for system instructions..." loading state in the council panel so users know the council is paused until the moderator finishes.
+  - UI polish: the animated conic-gradient border is now suppressed on the `topic` pill when in compact mode, and it is disabled for the "Go to current round" button. The `current` round tab no longer shows the blue outline (keeps a subtle neutral border + animated rim).
+
+---
+
+## Configuration & important env vars
+- NEWS_API_KEY — NewsAPI.org key (set in env) — required for fetching stories. Replace the placeholder in the code with your own key.
+- LMSTUDIO_URL — base URL for LM Studio (default: `http://127.0.0.1:1234`)
+- LMSTUDIO_API_KEY — optional API key for LM Studio
+- LM_MODEL — model identifier used by LM Studio (default in code: `qwen/qwen3-8b`)
+- LMSTUDIO_STREAM — set `false` to disable streaming responses
+- PANEL_SIZE — number of panel states (default ≈ 5)
+- REBUTTAL_SIZE — number of rebuttal participants (default ≈ 3)
+
+Set variables in your shell before `npm start`, e.g. (Windows PowerShell):
+
+$env:NEWS_API_KEY = "<your-key>"; npm start
+
+---
+
+## How LLM calls are handled
+- Two modes:
+  - Non‑streaming: `callLmStudio` — single completion returned, server emits `agent` SSE event.
+  - Streaming: `callLmStudioStream` — server reads stream, emits incremental `agent_delta` events; `agent_start` and `agent_end` mark boundaries.
+
+- Summarizer agents tuned: the Round Summary Agent uses a refined prompt and a larger token budget (up to 220 tokens); the Council Summary Agent uses an expanded prompt and up to 300 tokens — this improves coherence and can include an optional actionable takeaway.
+
+- The server expects model outputs occasionally wrapped with `<thought>`...</thought>; these blocks are suppressed from public streaming until closed.
+- Prompts enforce JSON‑only replies for selection stages; server attempts to parse and falls back to heuristics if parsing fails.
+
+---
+
+## How to test locally
+1. Ensure LM Studio (or compatible endpoint) is reachable and configured.
+2. Set `NEWS_API_KEY`.
+3. Start server: `npm start`.
+4. Open UI and press `Start Debate`, or trigger a manual story: `/api/trigger?title=My+Test`.
+5. Watch SSE events in browser DevTools Network or inspect console logs.
+
+---
+
+## Known limitations & suggested improvements 💡
+- No auth on server endpoints — add simple auth for exposed deployments.
+- NewsAPI key currently expected in env — add error message and fallback.
+- Add unit/integration tests for prompt parsing and verdict fallback logic.
+- Harden parsing of LLM JSON outputs (more robust sanitization and fallback).
+- Rate‑limit NewsAPI calls and add caching of results.
+- Provide Dockerfile or compose to spin up LM Studio + app for reproducible dev environment.
+
+---
+
+## Where to look in the code (quick pointers)
+- Map & SVG glow: `app.js` → `addGlowFilter()` and Leaflet `stateLayer` usage.
+- Event streaming & UI updates: `app.js` → `connectLiveStream()` and `upsertAgentStreamMessage()`.
+- Council orchestration & prompts: `server.js` → `runCouncil()` and `build*Prompt()` functions.
+- LLM streaming buffer & thought handling: `server.js` → `streamAgentMessage()`.
+
+---
+
+If you'd like, I can:
+1. Add this as `DOCUMENTATION.md` in the repo (done). ✅
+2. Create a short README with run / env examples. 🔧
+3. Extract and document the prompt templates to separate files for easier editing. ✂️
+
+Tell me which of the follow‑ups you want next.

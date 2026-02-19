@@ -764,10 +764,10 @@ const selectReplyState = async (story, transcript, rebuttalStates) => {
 
 const getCouncilSummary = async (story, transcript) => {
   const systemPrompt =
-    "You are a Strategic Systems Analyst. Synthesize the council debate objectively. " +
-    "No preamble. No parliamentary jargon. Exactly 2 sentences. " +
-    "Sentence 1: The primary economic issue all agents addressed. " +
-    "Sentence 2: Contrast the two most opposing states using 'While [State A] argues X, [State B] counters with Y'.";
+    "You are a Strategic Systems Analyst. Produce a concise, objective summary of the council debate in up to 3 short sentences. " +
+    "No preamble or parliamentary jargon. Sentence 1: one-line 'Key issue' that the council focused on. " +
+    "Sentence 2: the primary contrast between the two most opposing states (use the form: 'While [State A] argues X, [State B] counters with Y'). " +
+    "Sentence 3 (optional): a one-sentence actionable takeaway or implication for policy/stakeholders. Use factual, unambiguous language.";
   const userPrompt =
     `Story: ${story.title}\n` +
     `Debate transcript:\n${buildTranscriptText(transcript)}\n\n` +
@@ -778,7 +778,7 @@ const getCouncilSummary = async (story, transcript) => {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      200
+      300
     );
     return formatDebateSummary(response);
   } catch (error) {
@@ -792,8 +792,9 @@ const getRoundSummary = async (story, roundLabel, roundTranscript) => {
     return "";
   }
   const systemPrompt =
-    "You are Round Summary Agent. Summarize the round in 1-2 sentences. " +
-    "No <think> or <thought> tags. No markdown. No bullet points. No speaker list.";
+    "You are Round Summary Agent. Provide a concise, factual summary of the round in 1-3 short sentences. " +
+    "Sentence 1: main point or outcome. Sentence 2: the most important supporting contrast or implication. " +
+    "Do NOT include <think>/<thought> tags, markdown, bullets, or speaker lists. Return only the summary text.";
   const userPrompt =
     `Story: ${story.title}\n` +
     `Round: ${roundLabel}\n` +
@@ -805,7 +806,7 @@ const getRoundSummary = async (story, roundLabel, roundTranscript) => {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      120
+      220
     );
     return formatDebateSummary(response);
   } catch (error) {

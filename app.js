@@ -180,6 +180,10 @@ let councilsBooted = false;
 const systemNoteQueue = [];
 let systemNoteStreaming = false;
 let systemNotesContainer = null;
+// track how many streaming system notes are pending per round
+const systemRoundPending = new Map();
+// when true for a round, defer showing the "Begin round" control until pending notes finish
+const pendingRoundBeginControls = new Set();
 let agentsContainer = null;
 let llmMessagesContainer = null;
 let otherAgentsContainer = null;
@@ -234,6 +238,13 @@ const setCompactMode = (enabled) => {
     return;
   }
   layoutElement.classList.toggle("compact-mode", Boolean(enabled));
+  // also add a global marker on <body> so header elements (topic pill) can react
+  try {
+    document.body.classList.toggle("compact-mode", Boolean(enabled));
+  } catch (e) {
+    // ignore when body not present
+  }
+
   if (enabled) {
     layoutElement.classList.remove("feed-collapsed");
   }
@@ -1403,7 +1414,11 @@ const streamSystemNote = (message, options = {}) =>
       speed: 50,
       loading: Boolean(options.loading),
       scrollContainer: systemMessagesScrollContainer,
-    }).then(() => resolve(note));
+    }).then(() => {
+      // clear the loading spinner when the system message finishes streaming
+      setSystemNoteLoading(note, false);
+      resolve(note);
+    });
   });
 
 const processSystemNoteQueue = async () => {
@@ -1418,6 +1433,22 @@ const processSystemNoteQueue = async () => {
         continue;
       }
       await streamSystemNote(item.message, item.options || {});
+
+      // after a system note finishes streaming, decrement the pending counter for its round (if any)
+      const roundId = normalizeRoundId(item.options?.round);
+      if (roundId !== null) {
+        const prev = Math.max(0, systemRoundPending.get(roundId) || 0) - 1;
+        systemRoundPending.set(roundId, prev);
+        // when all pending system notes for the round are done, show any deferred Begin control
+        if (prev <= 0 && pendingRoundBeginControls.has(roundId)) {
+          pendingRoundBeginControls.delete(roundId);
+          setRoundBeginControl(roundId);
+        }
+        // if the round that finished streaming is the current system round, clear the orchestrator wait state
+        if (roundId === currentSystemRound) {
+          setOrchestratorWaiting(false);
+        }
+      }
     }
   } finally {
     systemNoteStreaming = false;
@@ -1466,6 +1497,30 @@ const setSystemNoteLoading = (note, isLoading, message) => {
   entry.classList.toggle("loading", Boolean(isLoading));
   if (message) {
     entry.textContent = message;
+  }
+};
+
+// update the Council Orchestrator card to indicate waiting for system instructions
+const setOrchestratorWaiting = (isWaiting, message = "Waiting for system instructions...") => {
+  if (!councilOrchestratorCardEl) return;
+  const speechList = councilOrchestratorCardEl.querySelector(".agent-speech-list");
+  if (!speechList) return;
+  let entry = speechList.querySelector(".agent-speech");
+  if (!entry) {
+    entry = document.createElement("div");
+    entry.className = "agent-speech";
+    speechList.appendChild(entry);
+  }
+  if (isWaiting) {
+    entry.classList.add("loading");
+    entry.textContent = message;
+    councilOrchestratorCardEl.classList.remove("muted");
+  } else {
+    entry.classList.remove("loading");
+    // restore to a neutral standby message if nothing else present
+    if (!entry.textContent || /waiting for system instructions/i.test(entry.textContent)) {
+      entry.textContent = "Standing by...";
+    }
   }
 };
 
@@ -1536,6 +1591,16 @@ const connectLiveStream = () => {
         loading: Boolean(data.loading),
         stream: Boolean(data.stream),
       });
+
+      // If this system message is marked `stream`, count it so UI can wait for it to finish
+      const roundId = normalizeRoundId(data.round);
+      if (Boolean(data.stream) && roundId !== null) {
+        systemRoundPending.set(roundId, (systemRoundPending.get(roundId) || 0) + 1);
+        // If system is streaming messages for the current system round, show orchestrator waiting
+        if (roundId === currentSystemRound) {
+          setOrchestratorWaiting(true);
+        }
+      }
     }
   });
 
@@ -1555,13 +1620,34 @@ const connectLiveStream = () => {
     currentSystemRound = roundId;
     ensureRoundContainer(roundId);
     ensureCouncilRoundContainer(roundId);
-    setActiveRound(roundId);
+    // Do NOT auto-switch the active *view* to the new round after it's announced.
+    // Let the user switch manually — only auto-open the very first round if nothing is active.
+    if (activeSystemRound === null) {
+      setActiveRound(roundId);
+    }
+
+    // If there are streaming system notes already pending for this round, show orchestrator waiting
+    if ((systemRoundPending.get(roundId) || 0) > 0) {
+      setOrchestratorWaiting(true);
+    }
+
     if (roundId === 0 && !councilsBooted) {
       setRoundBeginControl(0, { booting: true });
     } else if (String(data.label || "").trim().toLowerCase() === "verdict") {
       setRoundBeginControl(null);
     } else {
-      setRoundBeginControl(roundId);
+      // Defer showing the "Begin round" control until streaming system notes finish.
+      // Mark the round as pending and schedule a short check to avoid a race where
+      // `round_start` arrives before the stream system messages; the control will
+      // only appear when there are no pending streaming system notes for that round.
+      pendingRoundBeginControls.add(roundId);
+      if ((systemRoundPending.get(roundId) || 0) === 0) {
+        setTimeout(() => {
+          if (!pendingRoundBeginControls.has(roundId)) return;
+          pendingRoundBeginControls.delete(roundId);
+          setRoundBeginControl(roundId);
+        }, 220);
+      }
     }
   });
 
@@ -1655,8 +1741,8 @@ const connectLiveStream = () => {
     const data = JSON.parse(event.data);
     const resultRoundId = normalizeRoundId(data.round);
     if (currentSystemRound !== null) {
+      // keep completed round tab available but do NOT force the UI to switch views
       addCompletedRoundTab(currentSystemRound);
-      setActiveSystemRound(currentSystemRound);
     }
     setRoundBeginControl(null);
     if (data.summary) {
