@@ -875,6 +875,61 @@ const getCouncilVerdict = async (story, transcript, states) => {
   }
 };
 
+/* New: Impact Assessment Agent
+   - Asks the LLM to return lists of positively and negatively impacted states (JSON)
+   - Falls back to keyword scoring when parsing fails */
+const getImpactAssessment = async (story, transcript, states) => {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are the Impact Assessment Agent. Based on the debate transcript, return ONLY valid JSON: {\n  \"positive\": [\"State A\", ...],\n  \"negative\": [\"State B\", ...]\n}. " +
+        "Positive = states that benefit economically; Negative = states that are harmed or at risk. Use exact state names from the provided list. No explanation.",
+    },
+    {
+      role: "user",
+      content:
+        `Story: ${story.title}\n` +
+        `Debate transcript:\n${buildTranscriptText(transcript)}\n\nStates: ${states.join(", ")}\nReturn JSON only:`,
+    },
+  ];
+
+  try {
+    const response = await callLmStudio(messages, 200);
+    const cleaned = response.replace(/```json?\n?/gi, "").replace(/```/g, "").trim();
+    const parsed = parseJson(cleaned);
+    if (parsed && Array.isArray(parsed.positive) && Array.isArray(parsed.negative)) {
+      // validate names
+      const positive = parsed.positive.filter((s) => states.includes(s));
+      const negative = parsed.negative.filter((s) => states.includes(s));
+      return { positive, negative };
+    }
+    throw new Error("Invalid impact JSON");
+  } catch (error) {
+    console.error("[IMPACT] LLM failed or returned invalid JSON; using heuristic fallback:", error.message);
+    // Fallback: use keyword scoring to classify states
+    const scores = {};
+    states.forEach((s) => (scores[s] = 0));
+    const pos = /\b(benefit|gain|opportunity|growth|advantage|positive|win|improve|boost|strengthen)\b/gi;
+    const neg = /\b(risk|threat|harm|loss|negative|damage|suffer|decline|challenge|vulnerable|hurt)\b/gi;
+    transcript.forEach((entry) => {
+      if (!scores.hasOwnProperty(entry.state)) return;
+      const msg = entry.message.toLowerCase();
+      scores[entry.state] += (msg.match(pos) || []).length - (msg.match(neg) || []).length;
+    });
+    const positive = Object.entries(scores)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map((x) => x[0]);
+    const negative = Object.entries(scores)
+      .filter(([, v]) => v < 0)
+      .sort((a, b) => a[1] - b[1])
+      .map((x) => x[0]);
+    // ensure we always return arrays
+    return { positive, negative };
+  }
+};
+
 /* ─── Main Council Pipeline ─────────────────────────────── */
 
 const runCouncil = async (story) => {
@@ -1066,28 +1121,18 @@ const runCouncil = async (story) => {
     count: 0,
     order: [],
   });
-  sendEvent("system", {
-    round: 4,
-    message: "Verdict",
-  });
-  sendEvent("system", {
-    round: 4,
-    loading: true,
-    stream: true,
-    message: "Moderator is now analysing final arguments and preparing the verdict...",
-  });
+  await new Promise((resolve) => setTimeout(resolve, 5000));
   const summary = await getCouncilSummary(story, transcript);
-  const verdict = await getCouncilVerdict(story, transcript, allStates);
+  // Impact assessment agent: returns positive & negative state lists
+  const impacts = await getImpactAssessment(story, transcript, allStates);
 
   sendEvent("council_end", {
     round: 4,
     summary,
-    winner: verdict?.winner || "",
-    loser: verdict?.loser || "",
-    impacts: [],
+    impacts,
   });
 
-  console.log("[DONE] Winner:", verdict?.winner, "| Loser:", verdict?.loser);
+  console.log("[DONE] Impacts => +:", impacts.positive, "-:", impacts.negative);
   councilRunning = false;
 };
 

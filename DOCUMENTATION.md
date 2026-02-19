@@ -1,4 +1,4 @@
-# Council Deliberation — Project Documentation
+# Agentic Council — Project Documentation
 
 **Short summary**
 - Interactive demo that ingests news, runs a multi‑state "council" deliberation using a local LLM (LM Studio), and streams real‑time UI updates (map + council cards) via Server‑Sent Events (SSE).
@@ -70,6 +70,7 @@
   - The server streams agent output via `agent_start` / `agent_delta` / `agent_end` SSE events.
   - Thought buffering: model output may include `<thought>` blocks — server buffers inner thoughts and only exposes public text until thought is closed.
   - Summaries and verdicts use dedicated summarization calls and fallback heuristics if LLM output cannot be parsed.
+- New: An Impact Assessment Agent (runs at the end of the debate) returns `positive` and `negative` state lists. The UI highlights those states on the map and shows a short impact note instead of the old winner/loser labels.
 
 ---
 
@@ -83,7 +84,10 @@
   - Rounds no longer auto-navigate: the UI will mark the `current` round but the user must click the round tab or use the `Go to current round` control to view it.
 - Visuals: agent cards (team colors), system notes (streaming text), and an interactive map that highlights the active state.
   - System-note loading spinners are cleared automatically once a streaming system message finishes to avoid indefinite spinners.
-  - When the moderator/system is streaming messages for the next round, the **Council Orchestrator** card displays a "Waiting for system instructions..." loading state in the council panel so users know the council is paused until the moderator finishes.
+  - When a round starts the UI shows a 5‑second "Moderator is analysing..." hold before the round tab becomes visible. During that hold and while the system streams its messages:
+  - the **Council Orchestrator** card shows "Waiting for system instructions..." with a loading state,
+  - the `View round N • Current` tab appears only after the 5‑second hold,
+  - the `Begin round N` control remains disabled (pointer forbidden) until all system messages finish streaming.
   - UI polish: the animated conic-gradient border is now suppressed on the `topic` pill when in compact mode, and it is disabled for the "Go to current round" button. The `current` round tab no longer shows the blue outline (keeps a subtle neutral border + animated rim).
 
 ---

@@ -163,7 +163,6 @@ const layoutElement = document.querySelector(".layout");
 const topicText = document.getElementById("topic-text");
 const agentCards = new Map();
 const statusConnection = document.getElementById("status-connection");
-const statusProvider = document.getElementById("status-provider");
 const statusModel = document.getElementById("status-model");
 const statusStrip = statusModel?.parentElement || null;
 const topbarRight = document.querySelector(".topbar__right");
@@ -171,6 +170,7 @@ const fetchNextBtn = document.getElementById("fetch-next");
 const topicInput = document.getElementById("topic-input");
 const stateImpact = new Map();
 const agentStreamEntries = new Map();
+const agentEntryAnimators = new WeakMap();
 let debateLoadingNote = null;
 let activeFeedCard = null;
 let fetchLocked = false;
@@ -179,11 +179,104 @@ let debateRunningTimer = null;
 let councilsBooted = false;
 const systemNoteQueue = [];
 let systemNoteStreaming = false;
+const deferredSystemNotesByRound = new Map();
 let systemNotesContainer = null;
 // track how many streaming system notes are pending per round
 const systemRoundPending = new Map();
 // when true for a round, defer showing the "Begin round" control until pending notes finish
 const pendingRoundBeginControls = new Set();
+// analysis hold for moderator: rounds that require the 5s analysis spinner before the tab appears
+const analysisPendingRounds = new Set();
+const analysisTimers = new Map();
+// timers used to reveal round tabs after analysis delay
+const pendingRoundTabTimers = new Map();
+// rounds where analysis start should be deferred until system streaming completes (special-case: 0→1)
+const analysisStartDeferred = new Set();
+
+const isSystemNotePipelineIdle = () => !systemNoteStreaming && systemNoteQueue.length === 0;
+
+const isRoundUiReadyToReveal = (roundId) => {
+  if (roundId === null || roundId === undefined) {
+    return false;
+  }
+  if (analysisPendingRounds.has(roundId)) {
+    return false;
+  }
+  if ((systemRoundPending.get(roundId) || 0) > 0) {
+    return false;
+  }
+  return isSystemNotePipelineIdle();
+};
+
+const flushDeferredRoundUi = () => {
+  roundContainers.forEach((payload, roundId) => {
+    if (!isRoundUiReadyToReveal(roundId)) {
+      return;
+    }
+
+    if (payload?.tab) {
+      payload.tab.classList.remove("pending");
+      updateRoundTabMarkers();
+    }
+
+    const deferred = deferredSystemNotesByRound.get(roundId);
+    if (Array.isArray(deferred) && deferred.length) {
+      deferredSystemNotesByRound.delete(roundId);
+      deferred.forEach((item) => {
+        if (item?.message) {
+          systemNoteQueue.push(item);
+        }
+      });
+      processSystemNoteQueue();
+      return;
+    }
+
+    if (pendingRoundBeginControls.has(roundId)) {
+      pendingRoundBeginControls.delete(roundId);
+      setRoundBeginControl(roundId);
+    }
+  });
+};
+
+const getGoToCurrentRoundTarget = () => {
+  let target = null;
+  roundContainers.forEach((entry, id) => {
+    if (!entry?.tab || entry.tab.classList.contains("pending")) {
+      return;
+    }
+    if (target === null || id > target) {
+      target = id;
+    }
+  });
+  return target;
+};
+
+// Start a 5s analysis hold for a round (reveals tab after timeout if no system notes pending)
+function startAnalysisHold(id) {
+  if (analysisTimers.has(id)) return;
+  analysisPendingRounds.add(id);
+  const payload = roundContainers.get(id) || ensureRoundContainer(id);
+  if (payload?.tab) payload.tab.classList.add("pending");
+
+  const timer = setTimeout(() => {
+    analysisPendingRounds.delete(id);
+    analysisTimers.delete(id);
+    // reveal is deferred until all system notes (including queued summaries) are fully rendered
+    flushDeferredRoundUi();
+    // round 0 must keep booting state until all councils are loaded
+    if (id === 0 && !councilsBooted) {
+      setRoundBeginControl(0, { booting: true });
+    } else if (id === 4) {
+      setRoundBeginControl(id, { processing: true, processingMessage: "Preparing Verdict..." });
+    } else {
+      // show only the Go-to-current control; Begin remains deferred until system notes finish
+      setRoundBeginControl(id, { showGoOnly: true });
+    }
+    flushDeferredRoundUi();
+  }, 5000);
+
+  analysisTimers.set(id, timer);
+}
 let agentsContainer = null;
 let llmMessagesContainer = null;
 let otherAgentsContainer = null;
@@ -210,6 +303,63 @@ const getAgentCardKey = (payload = {}) => {
   const name = payload.agent || "Council";
   const roundId = normalizeRoundId(payload.round);
   return `${roundId === null ? "x" : roundId}:${name}`;
+};
+
+const animateAgentEntryText = (entry, text, options = {}) => {
+  if (!entry) {
+    return;
+  }
+  const nextText = String(text || "");
+  const flush = Boolean(options.flush);
+
+  let state = agentEntryAnimators.get(entry);
+  if (!state) {
+    state = {
+      shown: "",
+      target: "",
+      timer: null,
+    };
+    agentEntryAnimators.set(entry, state);
+  }
+
+  state.target = nextText;
+
+  if (flush) {
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    state.shown = state.target;
+    entry.textContent = state.target;
+    return;
+  }
+
+  if (state.shown.length > state.target.length || !state.target.startsWith(state.shown)) {
+    state.shown = "";
+    entry.textContent = "";
+  }
+
+  if (state.timer) {
+    return;
+  }
+
+  const step = () => {
+    if (state.shown === state.target) {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+      return;
+    }
+
+    const remaining = state.target.length - state.shown.length;
+    const chunk = Math.min(6, Math.max(1, Math.ceil(remaining / 8)));
+    state.shown = state.target.slice(0, state.shown.length + chunk);
+    entry.textContent = state.shown;
+  };
+
+  step();
+  state.timer = setInterval(step, 18);
 };
 
 const setFeedCollapsed = (collapsed) => {
@@ -331,7 +481,8 @@ const updateCouncilEmptyState = () => {
     messageCount += (entry.llm?.children?.length || 0) + (entry.others?.children?.length || 0);
   });
   const hasMessages = messageCount > 0;
-  councilOrchestratorCardEl.style.display = !hasMessages && !fetchLocked ? "grid" : "none";
+  const waitingVisible = councilOrchestratorCardEl.classList.contains("waiting");
+  councilOrchestratorCardEl.style.display = waitingVisible || (!hasMessages && !fetchLocked) ? "grid" : "none";
 };
 
 // Toggle UI lock state for debate: adds/removes `debate-locked` on <body>
@@ -413,6 +564,40 @@ const ensureDeliberationPanels = () => {
   councilPanelContainer = bottom;
 };
 
+const syncGoToCurrentRoundControl = () => {
+  if (!systemRoundControlsContainer) {
+    return;
+  }
+
+  const existing = systemRoundControlsContainer.querySelector(".go-current-round-btn");
+  const targetRound = getGoToCurrentRoundTarget();
+  const shouldShow = targetRound !== null && targetRound > 0 && activeSystemRound !== targetRound;
+
+  if (!shouldShow) {
+    existing?.remove();
+    return;
+  }
+
+  if (existing) {
+    existing.classList.remove("disabled");
+    existing.disabled = false;
+    return;
+  }
+
+  const goCurrentBtn = document.createElement("button");
+  goCurrentBtn.className = "begin-round-btn go-current-round-btn";
+  goCurrentBtn.textContent = "Go to current round";
+  goCurrentBtn.addEventListener("click", () => {
+    const target = getGoToCurrentRoundTarget();
+    if (target === null) {
+      return;
+    }
+    setActiveRound(target);
+    goCurrentBtn.remove();
+  });
+  systemRoundControlsContainer.appendChild(goCurrentBtn);
+};
+
 const setActiveSystemRound = (roundId) => {
   roundContainers.forEach((entry, id) => {
     if (entry.view) {
@@ -427,6 +612,52 @@ const setActiveSystemRound = (roundId) => {
   }
   activeSystemRound = roundId;
   updateRoundTabMarkers();
+  syncGoToCurrentRoundControl();
+
+  // If the user switches to the Verdict view and the council panel has no other
+  // messages (orchestrator is effectively "alone"), show a clear finished
+  // state message on the Council Orchestrator.
+  const roundLabel = (roundId !== null && roundTabLabels.get(roundId)) || "";
+  const isVerdict = String(roundLabel).trim().toLowerCase() === "verdict";
+
+  if (isVerdict && councilOrchestratorCardEl) {
+    // count messages across council round views
+    let messageCount = 0;
+    councilRoundContainers.forEach((entry) => {
+      messageCount += (entry.llm?.children?.length || 0) + (entry.others?.children?.length || 0);
+    });
+
+    const orchestratorVisible = messageCount === 0 && !fetchLocked;
+    if (orchestratorVisible) {
+      const speechList = councilOrchestratorCardEl.querySelector(".agent-speech-list");
+      if (speechList) {
+        let entry = speechList.querySelector(".agent-speech");
+        if (!entry) {
+          entry = document.createElement("div");
+          entry.className = "agent-speech";
+          speechList.appendChild(entry);
+        }
+        entry.classList.remove("loading");
+        entry.textContent = "The debate is finished";
+        councilOrchestratorCardEl.classList.remove("waiting");
+        councilOrchestratorCardEl.classList.remove("muted");
+        updateCouncilEmptyState();
+      }
+      return;
+    }
+  }
+
+  // If leaving the Verdict view and the orchestrator still shows the finished
+  // message, restore the neutral standby text.
+  if (!isVerdict && councilOrchestratorCardEl) {
+    const speechList = councilOrchestratorCardEl.querySelector(".agent-speech-list");
+    const entry = speechList?.querySelector(".agent-speech");
+    if (entry && entry.textContent === "The debate is finished") {
+      entry.textContent = "Begin a debate to see the council's responses.";
+      entry.classList.remove("loading");
+      updateCouncilEmptyState();
+    }
+  }
 };
 
 const updateRoundTabMarkers = () => {
@@ -539,6 +770,49 @@ const setRoundBeginControl = (roundId, options = {}) => {
     return;
   }
 
+  const goTargetRound = getGoToCurrentRoundTarget();
+  const canShowGoToCurrentRound =
+    goTargetRound !== null &&
+    goTargetRound > 0 &&
+    activeSystemRound !== goTargetRound;
+
+  const appendGoToCurrentRoundButton = () => {
+    if (!canShowGoToCurrentRound) {
+      return;
+    }
+    const goCurrentBtn = document.createElement("button");
+    goCurrentBtn.className = "begin-round-btn go-current-round-btn";
+    goCurrentBtn.textContent = "Go to current round";
+    goCurrentBtn.addEventListener("click", () => {
+      const targetRound = getGoToCurrentRoundTarget();
+      if (targetRound === null) {
+        return;
+      }
+      setActiveRound(targetRound);
+      goCurrentBtn.remove();
+    });
+    systemRoundControlsContainer.appendChild(goCurrentBtn);
+  };
+
+  // show only the "Go to current round" button when requested (used after analysis delay)
+  if (options.showGoOnly) {
+    // keep the orchestrator in waiting state until Begin is available
+    if (roundId > 0) setOrchestratorWaiting(true);
+    appendGoToCurrentRoundButton();
+    return;
+  }
+
+  if (options.processing) {
+    const processingBtn = document.createElement("button");
+    processingBtn.className = "begin-round-btn is-loading processing";
+    processingBtn.disabled = true;
+    processingBtn.classList.add("disabled");
+    processingBtn.textContent = options.processingMessage || "Processing...";
+    systemRoundControlsContainer.appendChild(processingBtn);
+    appendGoToCurrentRoundButton();
+    return;
+  }
+
   const btn = document.createElement("button");
   btn.className = "begin-round-btn";
   const isBooting = Boolean(options.booting);
@@ -547,29 +821,22 @@ const setRoundBeginControl = (roundId, options = {}) => {
     btn.classList.add("disabled");
     btn.textContent = "Councils are booting...";
     systemRoundControlsContainer.appendChild(btn);
-    if (currentSystemRound !== null) {
-      const goCurrentBtn = document.createElement("button");
-      goCurrentBtn.className = "begin-round-btn go-current-round-btn";
-      goCurrentBtn.textContent = "Go to current round";
-      goCurrentBtn.disabled = activeSystemRound === currentSystemRound;
-      if (goCurrentBtn.disabled) {
-        goCurrentBtn.classList.add("disabled");
-      }
-      goCurrentBtn.addEventListener("click", () => {
-        if (currentSystemRound === null) {
-          return;
-        }
-        setActiveRound(currentSystemRound);
-      });
-      systemRoundControlsContainer.appendChild(goCurrentBtn);
-    }
+    appendGoToCurrentRoundButton();
     return;
   }
   btn.textContent = `Begin round ${roundId}`;
   btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.classList.add("disabled");
-    btn.textContent = `Round ${roundId} started`;
+    // switch to the round being started so streaming content is visible live
+    setActiveRound(roundId);
+    // clear orchestrator waiting immediately when user begins the round
+    if (roundId > 0) setOrchestratorWaiting(false);
+    systemRoundControlsContainer.innerHTML = "";
+    const processingBtn = document.createElement("button");
+    processingBtn.className = "begin-round-btn is-loading processing";
+    processingBtn.disabled = true;
+    processingBtn.classList.add("disabled");
+    processingBtn.textContent = "Processing...";
+    systemRoundControlsContainer.appendChild(processingBtn);
     if (roundId === 0 && fetchNextBtn) {
       startDebateRunningIndicator();
       fetchNextBtn.classList.remove("is-loading");
@@ -587,23 +854,10 @@ const setRoundBeginControl = (roundId, options = {}) => {
   });
 
   systemRoundControlsContainer.appendChild(btn);
+  // Keep waiting state visible until Begin is actually clicked
+  if (roundId > 0) setOrchestratorWaiting(true);
 
-  if (currentSystemRound !== null) {
-    const goCurrentBtn = document.createElement("button");
-    goCurrentBtn.className = "begin-round-btn go-current-round-btn";
-    goCurrentBtn.textContent = "Go to current round";
-    goCurrentBtn.disabled = activeSystemRound === currentSystemRound;
-    if (goCurrentBtn.disabled) {
-      goCurrentBtn.classList.add("disabled");
-    }
-    goCurrentBtn.addEventListener("click", () => {
-      if (currentSystemRound === null) {
-        return;
-      }
-      setActiveRound(currentSystemRound);
-    });
-    systemRoundControlsContainer.appendChild(goCurrentBtn);
-  }
+  appendGoToCurrentRoundButton();
 };
 
 const ensureSystemNotesContainer = () => {
@@ -1206,7 +1460,7 @@ const upsertAgentStreamMessage = (payload) => {
     if (hasMessage) {
       removeStandingBy(card);
       entry.classList.remove("loading");
-      entry.textContent = `${roundLabel}${payload.message || ""}`;
+      animateAgentEntryText(entry, `${roundLabel}${payload.message || ""}`);
     } else if (!entry.textContent || entry.classList.contains("loading")) {
       entry.classList.add("loading");
       entry.textContent = "Council member is thinking...";
@@ -1241,39 +1495,38 @@ const upsertAgentMessage = (payload) => {
   agentCards.forEach((existing) => existing.classList.remove("speaking"));
   let card = agentCards.get(cardKey);
   if (!card) {
-    card = createAgentCard({ name, state: payload.state, message: payload.message });
+    card = createAgentCard({ name, state: payload.state, message: "" });
     agentCards.set(cardKey, card);
     insertAgentCard(card, roundId);
-  } else {
-    {
-    const speechList = card.querySelector(".agent-speech-list");
-    const nameEl = card.querySelector(".agent-name");
-    const avatarEl = card.querySelector(".agent-avatar");
-    if (speechList) {
-      const label = payload.label || "";
-      const roundLabel = label ? `${label}: ` : "";
-      const entry = document.createElement("div");
-      entry.className = "agent-speech";
-      if (label) {
-        entry.classList.add(`speech-${label.toLowerCase().replace(/\s+/g, "-")}`);
-      }
-      entry.textContent = `${roundLabel}${payload.message || ""}`;
-      speechList.appendChild(entry);
-    }
-    if (nameEl && payload.state) {
-      nameEl.innerHTML = `${name} <span>${payload.state}</span>`;
-    }
-    if (avatarEl && payload.state) {
-      const avatarData = getStateAvatar(payload.state);
-      avatarEl.textContent = avatarData.initials;
-      avatarEl.style.background = avatarData.background;
-    }
-    if (payload.state) {
-      card.classList.add(`team-${getStateTeam(payload.state)}`);
-    }
-    card.classList.remove("muted");
-    }
   }
+
+  const speechList = card.querySelector(".agent-speech-list");
+  const nameEl = card.querySelector(".agent-name");
+  const avatarEl = card.querySelector(".agent-avatar");
+  if (speechList) {
+    const label = payload.label || "";
+    const roundLabel = label ? `${label}: ` : "";
+    const entry = document.createElement("div");
+    entry.className = "agent-speech";
+    if (label) {
+      entry.classList.add(`speech-${label.toLowerCase().replace(/\s+/g, "-")}`);
+    }
+    speechList.appendChild(entry);
+    animateAgentEntryText(entry, `${roundLabel}${payload.message || ""}`);
+  }
+  if (nameEl && payload.state) {
+    nameEl.innerHTML = `${name} <span>${payload.state}</span>`;
+  }
+  if (avatarEl && payload.state) {
+    const avatarData = getStateAvatar(payload.state);
+    avatarEl.textContent = avatarData.initials;
+    avatarEl.style.background = avatarData.background;
+  }
+  if (payload.state) {
+    card.classList.add(`team-${getStateTeam(payload.state)}`);
+  }
+  card.classList.remove("muted");
+
   removeBootingCard();
   removeStandingBy(card);
 
@@ -1439,19 +1692,25 @@ const processSystemNoteQueue = async () => {
       if (roundId !== null) {
         const prev = Math.max(0, systemRoundPending.get(roundId) || 0) - 1;
         systemRoundPending.set(roundId, prev);
-        // when all pending system notes for the round are done, show any deferred Begin control
-        if (prev <= 0 && pendingRoundBeginControls.has(roundId)) {
-          pendingRoundBeginControls.delete(roundId);
-          setRoundBeginControl(roundId);
+
+        // if analysis start was deferred for this round (special-case: 0->1), start it now
+        if (prev <= 0 && analysisStartDeferred.has(roundId)) {
+          analysisStartDeferred.delete(roundId);
+          startAnalysisHold(roundId);
         }
-        // if the round that finished streaming is the current system round, clear the orchestrator wait state
-        if (roundId === currentSystemRound) {
-          setOrchestratorWaiting(false);
+
+        // reveal deferred tabs/buttons only after analysis and all queued notes are done
+        if (prev <= 0) {
+          flushDeferredRoundUi();
         }
       }
+
+      // also check globally in case non-stream system notes were queued for other rounds
+      flushDeferredRoundUi();
     }
   } finally {
     systemNoteStreaming = false;
+    flushDeferredRoundUi();
   }
 };
 // expose for handlers that may run later or from other scopes
@@ -1467,6 +1726,13 @@ try {
 const safeAddNote = (message, options = {}) => {
   try {
     if (typeof window !== "undefined" && typeof window["addSystemNote"] === "function") {
+      const roundId = normalizeRoundId(options?.round);
+      if (roundId !== null && analysisPendingRounds.has(roundId)) {
+        const bucket = deferredSystemNotesByRound.get(roundId) || [];
+        bucket.push({ message, options });
+        deferredSystemNotesByRound.set(roundId, bucket);
+        return null;
+      }
       if (options?.loading && !options?.stream) {
         return window["addSystemNote"](message, options);
       }
@@ -1512,15 +1778,19 @@ const setOrchestratorWaiting = (isWaiting, message = "Waiting for system instruc
     speechList.appendChild(entry);
   }
   if (isWaiting) {
+    councilOrchestratorCardEl.classList.add("waiting");
     entry.classList.add("loading");
     entry.textContent = message;
     councilOrchestratorCardEl.classList.remove("muted");
+    updateCouncilEmptyState();
   } else {
+    councilOrchestratorCardEl.classList.remove("waiting");
     entry.classList.remove("loading");
     // restore to a neutral standby message if nothing else present
     if (!entry.textContent || /waiting for system instructions/i.test(entry.textContent)) {
       entry.textContent = "Standing by...";
     }
+    updateCouncilEmptyState();
   }
 };
 
@@ -1611,14 +1881,15 @@ const connectLiveStream = () => {
       return;
     }
     if (String(data.label || "").trim().toLowerCase() === "verdict") {
-      roundTabLabels.set(roundId, "Verdict");
+      roundTabLabels.set(roundId, "Preparing Verdict...");
     }
     clearSystemLoadingIndicators();
     if (councilHeaderEl) {
       councilHeaderEl.textContent = "Council's messages";
     }
+    const prevSystemRound = currentSystemRound;
     currentSystemRound = roundId;
-    ensureRoundContainer(roundId);
+    const roundPayload = ensureRoundContainer(roundId);
     ensureCouncilRoundContainer(roundId);
     // Do NOT auto-switch the active *view* to the new round after it's announced.
     // Let the user switch manually — only auto-open the very first round if nothing is active.
@@ -1626,7 +1897,28 @@ const connectLiveStream = () => {
       setActiveRound(roundId);
     }
 
-    // If there are streaming system notes already pending for this round, show orchestrator waiting
+    // Show orchestrator waiting state immediately (analysis + incoming system messages)
+    setOrchestratorWaiting(true);
+
+    // Mark the round as undergoing moderator analysis — hide its tab until reveal
+    analysisPendingRounds.add(roundId);
+    if (roundPayload?.tab) {
+      roundPayload.tab.classList.add("pending");
+    }
+
+    // Defer analysis start for the special 0->1 transition until system messages finish
+    if (roundId === 1 && prevSystemRound === 0) {
+      // if there are no streaming system notes for round 1, start the 5s hold immediately
+      if ((systemRoundPending.get(roundId) || 0) === 0) {
+        startAnalysisHold(roundId);
+      } else {
+        analysisStartDeferred.add(roundId);
+      }
+    } else {
+      startAnalysisHold(roundId);
+    }
+
+    // If there are streaming system notes already pending for this round, keep orchestrator waiting
     if ((systemRoundPending.get(roundId) || 0) > 0) {
       setOrchestratorWaiting(true);
     }
@@ -1634,20 +1926,14 @@ const connectLiveStream = () => {
     if (roundId === 0 && !councilsBooted) {
       setRoundBeginControl(0, { booting: true });
     } else if (String(data.label || "").trim().toLowerCase() === "verdict") {
-      setRoundBeginControl(null);
+      setRoundBeginControl(roundId, { processing: true, processingMessage: "Preparing Verdict..." });
     } else {
       // Defer showing the "Begin round" control until streaming system notes finish.
-      // Mark the round as pending and schedule a short check to avoid a race where
-      // `round_start` arrives before the stream system messages; the control will
-      // only appear when there are no pending streaming system notes for that round.
+      // Mark the round as pending; reveal happens only after analysis + all queued system notes complete.
       pendingRoundBeginControls.add(roundId);
-      if ((systemRoundPending.get(roundId) || 0) === 0) {
-        setTimeout(() => {
-          if (!pendingRoundBeginControls.has(roundId)) return;
-          pendingRoundBeginControls.delete(roundId);
-          setRoundBeginControl(roundId);
-        }, 220);
-      }
+      // show orchestrator waiting state for rounds after Round 0
+      if (roundId > 0) setOrchestratorWaiting(true);
+      flushDeferredRoundUi();
     }
   });
 
@@ -1722,24 +2008,28 @@ const connectLiveStream = () => {
 
   stream.addEventListener("agent_start", (event) => {
     const data = JSON.parse(event.data);
-    upsertAgentStreamMessage({ ...data, message: "" });
+    upsertAgentStreamMessage({ ...data, message: "", _eventType: "start" });
   });
 
   stream.addEventListener("agent_delta", (event) => {
     const data = JSON.parse(event.data);
-    upsertAgentStreamMessage(data);
+    upsertAgentStreamMessage({ ...data, _eventType: "delta" });
     clearDebateLoading(data);
   });
 
   stream.addEventListener("agent_end", (event) => {
     const data = JSON.parse(event.data);
-    upsertAgentStreamMessage(data);
+    upsertAgentStreamMessage({ ...data, _eventType: "end" });
     clearDebateLoading(data);
   });
 
   stream.addEventListener("council_end", (event) => {
     const data = JSON.parse(event.data);
     const resultRoundId = normalizeRoundId(data.round);
+    if (resultRoundId === 4) {
+      roundTabLabels.set(4, "Verdict");
+      updateRoundTabMarkers();
+    }
     if (currentSystemRound !== null) {
       // keep completed round tab available but do NOT force the UI to switch views
       addCompletedRoundTab(currentSystemRound);
@@ -1752,13 +2042,19 @@ const connectLiveStream = () => {
         safeAddNote(data.summary);
       }
     }
-    if (data.winner || data.loser) {
-      const winner = data.winner ? `Winner: ${data.winner}` : "Winner: n/a";
-      const loser = data.loser ? `Loser: ${data.loser}` : "Loser: n/a";
-      if (resultRoundId !== null) {
-        safeAddNote(`${winner}. ${loser}.`, { round: resultRoundId });
-      } else {
-        safeAddNote(`${winner}. ${loser}.`);
+
+    // New: impact assessment (positive / negative lists)
+    if (data.impacts && (data.impacts.positive || data.impacts.negative)) {
+      const pos = (data.impacts.positive || []).filter(Boolean);
+      const neg = (data.impacts.negative || []).filter(Boolean);
+      if (pos.length || neg.length) {
+        const posText = pos.length ? `Positively impacted: ${pos.join(", ")}` : "Positively impacted: n/a";
+        const negText = neg.length ? `Negatively impacted: ${neg.join(", ")}` : "Negatively impacted: n/a";
+        if (resultRoundId !== null) {
+          safeAddNote(`${posText}\n${negText}`, { round: resultRoundId });
+        } else {
+          safeAddNote(`${posText}\n${negText}`);
+        }
       }
     }
 
@@ -1774,17 +2070,16 @@ const connectLiveStream = () => {
       insertWaitingCard();
     }
     
+    // Reset map styling then apply impacts (if any)
     stateLayer.eachLayer((layer) => {
       layer.getElement()?.classList.remove("active");
       layer.setStyle(baseStateStyle);
     });
     stateImpact.clear();
-    
-    if (data.winner) {
-      setStateImpact(data.winner, "positive");
-    }
-    if (data.loser) {
-      setStateImpact(data.loser, "negative");
+
+    if (data.impacts) {
+      (data.impacts.positive || []).forEach((s) => setStateImpact(s, "positive"));
+      (data.impacts.negative || []).forEach((s) => setStateImpact(s, "negative"));
     }
 
     // unlock UI
@@ -1801,9 +2096,6 @@ const connectLiveStream = () => {
     const data = JSON.parse(event.data);
     if (data.message) {
       safeAddNote(data.message);
-    }
-    if (data.provider) {
-      setStatusText(statusProvider, `news: ${data.provider}`);
     }
     if (data.model) {
       setStatusText(statusModel, `model: ${data.model}`);
