@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | LLM Council</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="login.css">
+</head>
+<body>
+    <main class="login-page">
+        <section class="login-card" aria-labelledby="login-heading">
+            <p class="login-kicker">LLM Council</p>
+            <h1 id="login-heading">Welcome back</h1>
+            <p class="login-subtitle">Sign in to continue your session.</p>
+
+            <form id="login-form" action="" class="form" autocomplete="on" novalidate>
+                <div class="field-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" placeholder="Enter your username" required>
+                </div>
+
+                <div class="field-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                </div>
+
+                <div class="form-meta">
+                    <label class="remember-wrap" for="remember-me">
+                        <input type="checkbox" id="remember-me" name="remember-me">
+                        <span>Remember me</span>
+                    </label>
+                    <a href="#" class="meta-link">Forgot password?</a>
+                </div>
+
+                <button type="submit" class="login-btn">Sign In</button>
+                <p id="login-feedback" class="form-feedback" aria-live="polite"></p>
+            </form>
+
+            <p class="signup-row">
+                New here?
+                <a href="signup.html" class="meta-link">Create an account</a>
+            </p>
+        </section>
+    </main>
+    <script src="login.js"></script>
+</body>
+</html>

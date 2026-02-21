@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up | LLM Council</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="signup.css">
+</head>
+<body>
+    <main class="signup-page">
+        <section class="signup-card" aria-labelledby="signup-heading">
+            <p class="signup-kicker">LLM Council</p>
+            <h1 id="signup-heading">Create account</h1>
+            <p class="signup-subtitle">Set up your profile to join the council.</p>
+
+            <form id="signup-form" action="" class="form" autocomplete="on" novalidate>
+                <div class="field-group">
+                    <label for="full-name">Full Name</label>
+                    <input type="text" id="full-name" name="full-name" placeholder="Enter your full name" required>
+                </div>
+
+                <div class="field-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" placeholder="Choose a username" required>
+                </div>
+
+                <div class="field-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" placeholder="Enter your email" required>
+                </div>
+
+                <div class="field-grid">
+                    <div class="field-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" placeholder="Create a password" required>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="confirm-password">Confirm Password</label>
+                        <input type="password" id="confirm-password" name="confirm-password" placeholder="Re-enter password" required>
+                    </div>
+                </div>
+
+                <label class="terms-wrap" for="terms">
+                    <input type="checkbox" id="terms" name="terms" required>
+                    <span>I agree to the Terms and Privacy Policy</span>
+                </label>
+
+                <button type="submit" class="signup-btn">Create Account</button>
+                <p id="signup-feedback" class="form-feedback" aria-live="polite"></p>
+            </form>
+
+            <p class="login-row">
+                Already have an account?
+                <a href="login.html" class="meta-link">Sign in</a>
+            </p>
+        </section>
+    </main>
+    <script src="signup.js"></script>
+</body>
+</html>

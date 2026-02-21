@@ -33,6 +33,25 @@ body {
   align-items: center;
   padding: 0;
 }
+.login{
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  background-color: white;
+  color: black;
+}
+.form{
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  
+}
+.login{
+  border: 2px solid white;
+  padding: 6rem;
+  border-radius: 1rem;
+}
+
 
 .frame {
   width: 100vw;

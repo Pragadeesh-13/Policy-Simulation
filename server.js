@@ -1,6 +1,8 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const { MongoClient } = require("mongodb");
 
 const PORT = Number(process.env.PORT || 3000);
 const NEWS_PROVIDER = "newsapi";
@@ -12,6 +14,9 @@ const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-8b";
 const LMSTUDIO_STREAM = process.env.LMSTUDIO_STREAM !== "false";
 const PANEL_SIZE = Math.max(2, Number(process.env.PANEL_SIZE || 5));
 const REBUTTAL_SIZE = Math.max(2, Number(process.env.REBUTTAL_SIZE || 3));
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/";
+const MONGODB_DB = process.env.MONGODB_DB || "llm-council";
+const MONGODB_USERS_COLLECTION = process.env.MONGODB_USERS_COLLECTION || "users";
 const COUNCIL_STATES = (
   process.env.COUNCIL_STATES ||
   "Tamil Nadu,Delhi,Kerala,Assam,Punjab,Karnataka,Maharashtra,Uttar Pradesh,West Bengal,Gujarat"
@@ -91,6 +96,7 @@ let latestStory = null;
 let councilRunning = false;
 let lastStatusMessage = "";
 let lastStatusAt = 0;
+let usersCollectionPromise = null;
 const pendingStories = [];
 const pendingRoundBegins = new Set();
 const roundBeginWaiters = new Map();
@@ -118,6 +124,54 @@ const notifyStatus = (message) => {
   lastStatusMessage = message;
   lastStatusAt = now;
   sendEvent("status", { message });
+};
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
+
+const hashPassword = (password) => {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+};
+
+const verifyPassword = (password, storedHash) => {
+  const [algo, salt, hashHex] = String(storedHash || "").split("$");
+  if (algo !== "scrypt" || !salt || !hashHex) {
+    return false;
+  }
+  const supplied = crypto.scryptSync(password, salt, 64);
+  const stored = Buffer.from(hashHex, "hex");
+  if (supplied.length !== stored.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(supplied, stored);
+};
+
+const getUsersCollection = async () => {
+  if (!MONGODB_URI) {
+    throw new Error("MONGODB_URI is not set");
+  }
+
+  if (!usersCollectionPromise) {
+    usersCollectionPromise = (async () => {
+      const client = new MongoClient(MONGODB_URI);
+      await client.connect();
+      const db = client.db(MONGODB_DB);
+      const collection = db.collection(MONGODB_USERS_COLLECTION);
+      await Promise.all([
+        collection.createIndex({ usernameLower: 1 }, { unique: true }),
+        collection.createIndex({ emailLower: 1 }, { unique: true }),
+      ]);
+      return collection;
+    })().catch((error) => {
+      usersCollectionPromise = null;
+      throw error;
+    });
+  }
+
+  return usersCollectionPromise;
 };
 
 const normalizeRoundNumber = (value) => {
@@ -1255,6 +1309,91 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === "/api/news") {
     safeJson(res, 200, { story: latestStory });
+    return;
+  }
+
+  if (url.pathname === "/api/auth/signup" && req.method === "POST") {
+    readJsonBody(req)
+      .then(async (body) => {
+        const fullName = String(body?.fullName || "").trim();
+        const email = String(body?.email || "").trim();
+        const username = String(body?.username || "").trim();
+        const password = String(body?.password || "");
+        const confirmPassword = String(body?.confirmPassword || "");
+
+        if (!fullName || !email || !username || !password || !confirmPassword) {
+          safeJson(res, 400, { ok: false, error: "All fields are required" });
+          return;
+        }
+        if (password.length < 6) {
+          safeJson(res, 400, { ok: false, error: "Password must be at least 6 characters" });
+          return;
+        }
+        if (password !== confirmPassword) {
+          safeJson(res, 400, { ok: false, error: "Passwords do not match" });
+          return;
+        }
+
+        const users = await getUsersCollection();
+        const now = new Date();
+        await users.insertOne({
+          fullName,
+          email,
+          emailLower: normalizeEmail(email),
+          username,
+          usernameLower: normalizeUsername(username),
+          passwordHash: hashPassword(password),
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        safeJson(res, 201, { ok: true, message: "Account created successfully" });
+      })
+      .catch((error) => {
+        if (error?.code === 11000) {
+          safeJson(res, 409, { ok: false, error: "Username or email already exists" });
+          return;
+        }
+        safeJson(res, 500, { ok: false, error: error?.message || "Signup failed" });
+      });
+    return;
+  }
+
+  if (url.pathname === "/api/auth/login" && req.method === "POST") {
+    readJsonBody(req)
+      .then(async (body) => {
+        const identifier = String(body?.username || "").trim();
+        const password = String(body?.password || "");
+
+        if (!identifier || !password) {
+          safeJson(res, 400, { ok: false, error: "Username and password are required" });
+          return;
+        }
+
+        const users = await getUsersCollection();
+        const normalized = normalizeUsername(identifier);
+        const user = await users.findOne({
+          $or: [{ usernameLower: normalized }, { emailLower: normalizeEmail(identifier) }],
+        });
+
+        if (!user || !verifyPassword(password, user.passwordHash)) {
+          safeJson(res, 401, { ok: false, error: "Invalid credentials" });
+          return;
+        }
+
+        safeJson(res, 200, {
+          ok: true,
+          user: {
+            id: String(user._id),
+            fullName: user.fullName,
+            username: user.username,
+            email: user.email,
+          },
+        });
+      })
+      .catch((error) => {
+        safeJson(res, 500, { ok: false, error: error?.message || "Login failed" });
+      });
     return;
   }
 
