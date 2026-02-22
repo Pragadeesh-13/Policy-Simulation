@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="login.css">
+    <link rel="stylesheet" href="/css/login.css">
 </head>
 <body>
     <main class="login-page">
@@ -36,6 +36,8 @@
                 </div>
 
                 <button type="submit" class="login-btn">Sign In</button>
+                <div class="auth-divider"><span>or</span></div>
+                <button type="button" class="google-btn" id="google-signin-btn">Sign in with Google</button>
                 <p id="login-feedback" class="form-feedback" aria-live="polite"></p>
             </form>
 
@@ -45,6 +47,9 @@
             </p>
         </section>
     </main>
-    <script src="login.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="/js/firebase-auth.js"></script>
+    <script src="/js/login.js"></script>
 </body>
 </html>

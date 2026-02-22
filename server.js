@@ -9,9 +9,9 @@ const PORT = Number(process.env.PORT || 3000);
 const NEWS_PROVIDER = "newsapi";
 const NEWS_API_KEY = process.env.NEWS_API_KEY || "b883c299ae464705b215df75a65147c1";
 const NEWS_QUERY = process.env.NEWS_QUERY || "";
-const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://127.0.0.1:1234";
+const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://100.72.48.67:1234";
 const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY || "";
-const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-8b";
+const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-14b";
 const LMSTUDIO_STREAM = process.env.LMSTUDIO_STREAM !== "false";
 const PANEL_SIZE = Math.max(2, Number(process.env.PANEL_SIZE || 5));
 const REBUTTAL_SIZE = Math.max(2, Number(process.env.REBUTTAL_SIZE || 3));
@@ -96,7 +96,7 @@ const STATE_PROFILES = {
   }
 };
 
-const STATIC_ROOT = __dirname;
+const STATIC_ROOT = path.join(__dirname, "public");
 const clients = new Set();
 const recentStoryIds = [];
 const RECENT_LIMIT = 50;

@@ -1,6 +1,7 @@
 const signupForm = document.getElementById("signup-form");
 const signupFeedback = document.getElementById("signup-feedback");
 const signupButton = signupForm?.querySelector(".signup-btn");
+const googleButton = document.getElementById("google-signin-btn");
 
 const setSignupFeedback = (message, type = "error") => {
   if (!signupFeedback) return;
@@ -67,6 +68,39 @@ if (signupForm) {
         signupButton.disabled = false;
         signupButton.textContent = "Create Account";
       }
+    }
+  });
+}
+
+if (googleButton) {
+  googleButton.addEventListener("click", async () => {
+    setSignupFeedback("");
+
+    if (typeof window.llmCouncilGoogleSignIn !== "function") {
+      setSignupFeedback("Google sign-in is not available right now.");
+      return;
+    }
+
+    googleButton.disabled = true;
+    const originalLabel = googleButton.textContent;
+    googleButton.textContent = "Connecting to Google...";
+
+    try {
+      await window.llmCouncilGoogleSignIn();
+      setSignupFeedback("Google sign-in successful. Redirecting...", "success");
+      setTimeout(() => {
+        window.location.href = "index.html";
+      }, 600);
+    } catch (error) {
+      const message = String(error?.message || "Google sign-in failed.");
+      if (message.includes("popup-closed-by-user")) {
+        setSignupFeedback("Google sign-in was cancelled.");
+      } else {
+        setSignupFeedback("Google sign-in failed. Please try again.");
+      }
+    } finally {
+      googleButton.disabled = false;
+      googleButton.textContent = originalLabel;
     }
   });
 }

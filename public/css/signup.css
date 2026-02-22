@@ -25,17 +25,17 @@ body {
   font-family: "Poppins", sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at 25% 10%, #202020 0%, transparent 42%),
-    radial-gradient(circle at 85% 80%, #1a1a1a 0%, transparent 36%),
+    radial-gradient(circle at 20% 10%, #202020 0%, transparent 40%),
+    radial-gradient(circle at 85% 80%, #1a1a1a 0%, transparent 38%),
     linear-gradient(180deg, var(--bg-soft) 0%, var(--bg) 75%);
 }
 
-.login-page {
+.signup-page {
   width: 100%;
-  max-width: 440px;
+  max-width: 560px;
 }
 
-.login-card {
+.signup-card {
   border: 1px solid var(--panel-border);
   border-radius: 20px;
   padding: 34px 28px;
@@ -44,7 +44,7 @@ body {
   box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
 }
 
-.login-kicker {
+.signup-kicker {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -59,7 +59,7 @@ h1 {
   margin-bottom: 8px;
 }
 
-.login-subtitle {
+.signup-subtitle {
   color: var(--muted);
   font-size: 14px;
   margin-bottom: 24px;
@@ -75,12 +75,19 @@ h1 {
   gap: 8px;
 }
 
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
 label {
   font-size: 13px;
   font-weight: 500;
 }
 
 input[type="text"],
+input[type="email"],
 input[type="password"] {
   width: 100%;
   border-radius: 12px;
@@ -97,26 +104,20 @@ input::placeholder {
 }
 
 input[type="text"]:focus,
+input[type="email"]:focus,
 input[type="password"]:focus {
   border-color: var(--field-border-focus);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
   background-color: rgba(255, 255, 255, 0.06);
 }
 
-.form-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-}
-
-.remember-wrap {
+.terms-wrap {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
   color: var(--muted);
+  font-size: 13px;
 }
 
 input[type="checkbox"] {
@@ -125,16 +126,7 @@ input[type="checkbox"] {
   accent-color: #ffffff;
 }
 
-.meta-link {
-  color: #d8d8d8;
-  text-decoration: none;
-}
-
-.meta-link:hover {
-  text-decoration: underline;
-}
-
-.login-btn {
+.signup-btn {
   width: 100%;
   margin-top: 6px;
   border: 1px solid rgba(255, 255, 255, 0.25);
@@ -149,13 +141,64 @@ input[type="checkbox"] {
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.login-btn:hover {
+.signup-btn:hover {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.45);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
-.login-btn:disabled {
+.signup-btn:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.auth-divider {
+  position: relative;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.auth-divider::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.auth-divider span {
+  position: relative;
+  z-index: 1;
+  padding: 0 10px;
+  background: rgba(17, 17, 17, 0.9);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.google-btn {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-family: "Poppins", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.google-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.google-btn:disabled {
   opacity: 0.75;
   cursor: not-allowed;
   transform: none;
@@ -174,15 +217,27 @@ input[type="checkbox"] {
   color: #91e7a4;
 }
 
-.signup-row {
+.login-row {
   margin-top: 20px;
   text-align: center;
   color: var(--muted);
   font-size: 13px;
 }
 
-.signup-row .meta-link {
+.meta-link {
+  color: #d8d8d8;
+  text-decoration: none;
   margin-left: 4px;
+}
+
+.meta-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 620px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 480px) {
@@ -190,7 +245,7 @@ input[type="checkbox"] {
     padding: 16px;
   }
 
-  .login-card {
+  .signup-card {
     border-radius: 16px;
     padding: 26px 20px;
   }

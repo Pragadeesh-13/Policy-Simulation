@@ -957,7 +957,7 @@ body {
 }
 
 .agent-card.system .agent-avatar {
-  background-image: url("ai_temp.png");
+  background-image: url("/assets/images/ai_temp.png");
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
