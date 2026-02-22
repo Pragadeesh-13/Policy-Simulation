@@ -1,8 +1,9 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
-const { MongoClient } = require("mongodb");
+const { initializeApp, applicationDefault, cert, getApps } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getFirestore } = require("firebase-admin/firestore");
 
 const PORT = Number(process.env.PORT || 3000);
 const NEWS_PROVIDER = "newsapi";
@@ -14,9 +15,16 @@ const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-8b";
 const LMSTUDIO_STREAM = process.env.LMSTUDIO_STREAM !== "false";
 const PANEL_SIZE = Math.max(2, Number(process.env.PANEL_SIZE || 5));
 const REBUTTAL_SIZE = Math.max(2, Number(process.env.REBUTTAL_SIZE || 3));
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/";
-const MONGODB_DB = process.env.MONGODB_DB || "llm-council";
-const MONGODB_USERS_COLLECTION = process.env.MONGODB_USERS_COLLECTION || "users";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "";
+const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL || "";
+const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY || "";
+const FIREBASE_SERVICE_ACCOUNT_JSON = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "";
+const DEFAULT_FIREBASE_CREDS_PATH = path.join(__dirname, "firebase_creds.json");
+const FIREBASE_SERVICE_ACCOUNT_PATH =
+  process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+  (fs.existsSync(DEFAULT_FIREBASE_CREDS_PATH) ? DEFAULT_FIREBASE_CREDS_PATH : "");
+const FIREBASE_WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || "AIzaSyDIwGeB4nnmpb2Ufhh8AMNvw0OKFYi67gQ";
+const FIREBASE_USERS_COLLECTION = process.env.FIREBASE_USERS_COLLECTION || "users";
 const COUNCIL_STATES = (
   process.env.COUNCIL_STATES ||
   "Tamil Nadu,Delhi,Kerala,Assam,Punjab,Karnataka,Maharashtra,Uttar Pradesh,West Bengal,Gujarat"
@@ -96,7 +104,6 @@ let latestStory = null;
 let councilRunning = false;
 let lastStatusMessage = "";
 let lastStatusAt = 0;
-let usersCollectionPromise = null;
 const pendingStories = [];
 const pendingRoundBegins = new Set();
 const roundBeginWaiters = new Map();
@@ -130,48 +137,174 @@ const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
 const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
 
-const hashPassword = (password) => {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `scrypt$${salt}$${hash}`;
+const parseServiceAccountFromInput = () => {
+  if (FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      return JSON.parse(FIREBASE_SERVICE_ACCOUNT_JSON);
+    } catch {
+      throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
+    }
+  }
+
+  if (FIREBASE_SERVICE_ACCOUNT_PATH) {
+    try {
+      const fileContent = fs.readFileSync(FIREBASE_SERVICE_ACCOUNT_PATH, "utf8");
+      return JSON.parse(fileContent);
+    } catch {
+      throw new Error("FIREBASE_SERVICE_ACCOUNT_PATH could not be read as JSON");
+    }
+  }
+
+  return null;
 };
 
-const verifyPassword = (password, storedHash) => {
-  const [algo, salt, hashHex] = String(storedHash || "").split("$");
-  if (algo !== "scrypt" || !salt || !hashHex) {
-    return false;
-  }
-  const supplied = crypto.scryptSync(password, salt, 64);
-  const stored = Buffer.from(hashHex, "hex");
-  if (supplied.length !== stored.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(supplied, stored);
-};
-
-const getUsersCollection = async () => {
-  if (!MONGODB_URI) {
-    throw new Error("MONGODB_URI is not set");
+const getFirebaseApp = () => {
+  if (getApps().length) {
+    return getApps()[0];
   }
 
-  if (!usersCollectionPromise) {
-    usersCollectionPromise = (async () => {
-      const client = new MongoClient(MONGODB_URI);
-      await client.connect();
-      const db = client.db(MONGODB_DB);
-      const collection = db.collection(MONGODB_USERS_COLLECTION);
-      await Promise.all([
-        collection.createIndex({ usernameLower: 1 }, { unique: true }),
-        collection.createIndex({ emailLower: 1 }, { unique: true }),
-      ]);
-      return collection;
-    })().catch((error) => {
-      usersCollectionPromise = null;
-      throw error;
+  const serviceAccount = parseServiceAccountFromInput();
+  if (serviceAccount) {
+    return initializeApp({
+      credential: cert({
+        projectId: serviceAccount.project_id,
+        clientEmail: serviceAccount.client_email,
+        privateKey: String(serviceAccount.private_key || "").replace(/\\n/g, "\n"),
+      }),
     });
   }
 
-  return usersCollectionPromise;
+  if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
+    return initializeApp({
+      credential: cert({
+        projectId: FIREBASE_PROJECT_ID,
+        clientEmail: FIREBASE_CLIENT_EMAIL,
+        privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      }),
+    });
+  }
+
+  return initializeApp({
+    credential: applicationDefault(),
+  });
+};
+
+const firebaseApp = getFirebaseApp();
+const firebaseAuth = getAuth(firebaseApp);
+const firestore = getFirestore(firebaseApp);
+const usersCollectionRef = firestore.collection(FIREBASE_USERS_COLLECTION);
+const localProfilesByUid = new Map();
+const localProfilesByUsername = new Map();
+const localProfilesByEmail = new Map();
+
+const cacheLocalProfile = (profile) => {
+  if (!profile?.uid) {
+    return;
+  }
+  localProfilesByUid.set(profile.uid, profile);
+  if (profile.usernameLower) {
+    localProfilesByUsername.set(profile.usernameLower, profile);
+  }
+  if (profile.emailLower) {
+    localProfilesByEmail.set(profile.emailLower, profile);
+  }
+};
+
+const findProfileByUsername = async (usernameLower) => {
+  try {
+    const snapshot = await usersCollectionRef.where("usernameLower", "==", usernameLower).limit(1).get();
+    if (!snapshot.empty) {
+      const profile = snapshot.docs[0].data();
+      cacheLocalProfile(profile);
+      return profile;
+    }
+  } catch (error) {
+    console.error("[AUTH] Username lookup via Firestore failed:", error.message);
+  }
+  return localProfilesByUsername.get(usernameLower) || null;
+};
+
+const findProfileByEmail = async (emailLower) => {
+  try {
+    const snapshot = await usersCollectionRef.where("emailLower", "==", emailLower).limit(1).get();
+    if (!snapshot.empty) {
+      const profile = snapshot.docs[0].data();
+      cacheLocalProfile(profile);
+      return profile;
+    }
+  } catch (error) {
+    console.error("[AUTH] Email lookup via Firestore failed:", error.message);
+  }
+  return localProfilesByEmail.get(emailLower) || null;
+};
+
+const findProfileByUid = async (uid) => {
+  try {
+    const snapshot = await usersCollectionRef.doc(uid).get();
+    if (snapshot.exists) {
+      const profile = snapshot.data();
+      cacheLocalProfile(profile);
+      return profile;
+    }
+  } catch (error) {
+    console.error("[AUTH] UID lookup via Firestore failed:", error.message);
+  }
+  return localProfilesByUid.get(uid) || null;
+};
+
+const mapFirebaseAuthError = (code, fallbackMessage) => {
+  const raw = String(code || "");
+  if (
+    raw.includes("CONFIGURATION_NOT_FOUND") ||
+    raw.includes("There is no configuration corresponding to the provided identifier")
+  ) {
+    return "Firebase Authentication is not configured. Enable Email/Password sign-in in Firebase Console.";
+  }
+
+  switch (code) {
+    case "EMAIL_EXISTS":
+    case "auth/email-already-exists":
+      return "Username or email already exists";
+    case "auth/invalid-credential":
+    case "auth/invalid-email":
+      return "Invalid email address";
+    case "auth/invalid-password":
+    case "auth/weak-password":
+      return "Password must be at least 6 characters";
+    case "INVALID_PASSWORD":
+    case "EMAIL_NOT_FOUND":
+    case "INVALID_LOGIN_CREDENTIALS":
+      return "Invalid credentials";
+    default:
+      return fallbackMessage;
+  }
+};
+
+const signInWithFirebase = async (email, password) => {
+  if (!FIREBASE_WEB_API_KEY) {
+    throw new Error("FIREBASE_WEB_API_KEY is not set");
+  }
+
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password,
+        returnSecureToken: true,
+      }),
+    }
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const code = payload?.error?.message || "";
+    throw new Error(mapFirebaseAuthError(code, "Login failed"));
+  }
+
+  return payload;
 };
 
 const normalizeRoundNumber = (value) => {
@@ -1243,7 +1376,7 @@ const readJsonBody = (req) =>
 
 const serveStatic = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+  let filePath = url.pathname === "/" ? "/login.html" : url.pathname;
   filePath = path.normalize(filePath).replace(/^([.]{2}[\/\\])+/, "");
   const resolvedPath = path.join(STATIC_ROOT, filePath);
 
@@ -1334,27 +1467,65 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const users = await getUsersCollection();
-        const now = new Date();
-        await users.insertOne({
-          fullName,
+        const usernameLower = normalizeUsername(username);
+        const emailLower = normalizeEmail(email);
+
+        const [usernameProfile, emailProfile] = await Promise.all([
+          findProfileByUsername(usernameLower),
+          findProfileByEmail(emailLower),
+        ]);
+
+        if (usernameProfile || emailProfile) {
+          safeJson(res, 409, { ok: false, error: "Username or email already exists" });
+          return;
+        }
+
+        const userRecord = await firebaseAuth.createUser({
           email,
-          emailLower: normalizeEmail(email),
-          username,
-          usernameLower: normalizeUsername(username),
-          passwordHash: hashPassword(password),
-          createdAt: now,
-          updatedAt: now,
+          password,
+          displayName: fullName,
         });
+
+        try {
+          const profile = {
+            uid: userRecord.uid,
+            fullName,
+            email,
+            emailLower,
+            username,
+            usernameLower,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          await usersCollectionRef.doc(userRecord.uid).set(profile);
+          cacheLocalProfile(profile);
+        } catch (error) {
+          console.error("[AUTH] Firestore profile write failed, continuing with Auth-only profile:", error.message);
+          cacheLocalProfile({
+            uid: userRecord.uid,
+            fullName,
+            email,
+            emailLower,
+            username,
+            usernameLower,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
 
         safeJson(res, 201, { ok: true, message: "Account created successfully" });
       })
       .catch((error) => {
-        if (error?.code === 11000) {
-          safeJson(res, 409, { ok: false, error: "Username or email already exists" });
-          return;
-        }
-        safeJson(res, 500, { ok: false, error: error?.message || "Signup failed" });
+        console.error("[AUTH] Signup failed:", error?.message || error);
+        const fallback = error?.message || "Signup failed";
+        const mapped = mapFirebaseAuthError(error?.errorInfo?.code || error?.message, fallback);
+        const status =
+          mapped === "Username or email already exists"
+            ? 409
+            : mapped.includes("Firebase Authentication is not configured")
+              ? 503
+              : 500;
+        safeJson(res, status, { ok: false, error: mapped });
       });
     return;
   }
@@ -1370,28 +1541,56 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const users = await getUsersCollection();
-        const normalized = normalizeUsername(identifier);
-        const user = await users.findOne({
-          $or: [{ usernameLower: normalized }, { emailLower: normalizeEmail(identifier) }],
-        });
+        const normalizedEmail = normalizeEmail(identifier);
+        const normalizedUsername = normalizeUsername(identifier);
+        const isEmailLogin = normalizedEmail.includes("@");
 
-        if (!user || !verifyPassword(password, user.passwordHash)) {
+        let profile = null;
+        let loginEmail = normalizedEmail;
+
+        if (isEmailLogin) {
+          profile = await findProfileByEmail(normalizedEmail);
+        } else {
+          profile = await findProfileByUsername(normalizedUsername);
+          if (!profile) {
+            safeJson(res, 401, { ok: false, error: "Invalid credentials" });
+            return;
+          }
+          loginEmail = String(profile.emailLower || "");
+        }
+
+        if (!loginEmail) {
           safeJson(res, 401, { ok: false, error: "Invalid credentials" });
           return;
         }
 
+        const authSession = await signInWithFirebase(loginEmail, password);
+        const uid = String(authSession?.localId || "");
+
+        if (!uid) {
+          safeJson(res, 401, { ok: false, error: "Invalid credentials" });
+          return;
+        }
+
+        if (!profile) {
+          profile = await findProfileByUid(uid);
+        }
+
+        const resolvedProfile = profile || {};
+        const authUser = await firebaseAuth.getUser(uid);
+
         safeJson(res, 200, {
           ok: true,
           user: {
-            id: String(user._id),
-            fullName: user.fullName,
-            username: user.username,
-            email: user.email,
+            id: uid,
+            fullName: resolvedProfile.fullName || authUser.displayName || "",
+            username: resolvedProfile.username || "",
+            email: resolvedProfile.email || authUser.email || "",
           },
         });
       })
       .catch((error) => {
+        console.error("[AUTH] Login failed:", error?.message || error);
         safeJson(res, 500, { ok: false, error: error?.message || "Login failed" });
       });
     return;

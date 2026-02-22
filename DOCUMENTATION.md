@@ -100,6 +100,13 @@
 - LMSTUDIO_STREAM — set `false` to disable streaming responses
 - PANEL_SIZE — number of panel states (default ≈ 5)
 - REBUTTAL_SIZE — number of rebuttal participants (default ≈ 3)
+- FIREBASE_PROJECT_ID — Firebase project ID (needed when not using ADC)
+- FIREBASE_CLIENT_EMAIL — service account client email
+- FIREBASE_PRIVATE_KEY — service account private key (use escaped `\\n` in `.env`)
+- FIREBASE_SERVICE_ACCOUNT_JSON — full service-account JSON string (alternative to split vars)
+- FIREBASE_SERVICE_ACCOUNT_PATH — absolute path to service-account JSON file (alternative to split vars)
+- FIREBASE_WEB_API_KEY — Firebase Web API key used by backend login (`signInWithPassword`)
+- FIREBASE_USERS_COLLECTION — Firestore collection for user profiles (default: `users`)
 
 Set variables in your shell before `npm start`, e.g. (Windows PowerShell):
 
