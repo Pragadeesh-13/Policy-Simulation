@@ -38,22 +38,20 @@
 
       <main class="layout">
         <section class="panel feed" id="feed-list">
-          <div class="feed-controls">
-            <input
-              class="feed-input"
-              id="topic-input"
-              type="text"
-              placeholder="Type a debate topic..."
-              aria-label="Debate topic"
-            />
-            <button class="feed-btn" id="fetch-next" type="button">Start Debate</button>
+          <div class="feed-actions" id="feed-actions">
+            <button class="feed-btn" id="fetch-next" type="button">Begin Simulation</button>
           </div>
-          <div class="feed-card active" id="active-feed-card">
-            <div class="feed-card__header">
-              <span class="badge">Active</span>
-            </div>
-            <h3>Waiting for news...</h3>
-            <p>System &bull; now</p>
+          <div class="feed-body" id="feed-body">
+            <div class="feed-empty" id="feed-empty">Simulate any Policy</div>
+          </div>
+          <div class="feed-controls" aria-label="Policy details">
+            <textarea
+              class="feed-input feed-input--primary"
+              id="topic-input"
+              placeholder="Type in details of a policy"
+              aria-label="Policy details"
+              rows="2"
+            ></textarea>
           </div>
         </section>
 
@@ -68,7 +66,7 @@
             <div class="agent-avatar"></div>
             <div>
               <div class="agent-name">Council booting...</div>
-                <div class="agent-speech">Waiting for debate signal.</div>
+                <div class="agent-speech">Waiting for simulation signal.</div>
             </div>
           </div>
         </section>

@@ -1,7 +1,7 @@
 # Agentic Council — Project Documentation
 
 **Short summary**
-- Interactive demo that ingests news, runs a multi‑state "council" deliberation using a local LLM (LM Studio), and streams real‑time UI updates (map + council cards) via Server‑Sent Events (SSE).
+- Interactive demo that takes policy input, runs a multi‑state "council" deliberation using a local LLM (LM Studio), and streams real‑time UI updates (map + council cards) via Server‑Sent Events (SSE).
 
 ---
 
@@ -11,9 +11,8 @@
    - npm start
 2. Open: http://localhost:3000 (or the port in `PORT` env).
 3. Configure environment (recommended):
-   - set `NEWS_API_KEY` (NewsAPI.org) — replace the repo's placeholder.
-   - set `LMSTUDIO_URL` and `LMSTUDIO_API_KEY` if required by your LM Studio instance.
-   - optional: `LM_MODEL`, `PANEL_SIZE`, `REBUTTAL_SIZE`, `COUNCIL_STATES`, `PORT`.
+  - set `LMSTUDIO_URL` and `LMSTUDIO_API_KEY` if required by your LM Studio instance.
+  - optional: `LM_MODEL`, `PANEL_SIZE`, `REBUTTAL_SIZE`, `COUNCIL_STATES`, `PORT`.
 4. Quick test endpoints:
    - Manual trigger: GET /api/trigger?title=Test
    - Start next story: POST /api/next { query }
@@ -25,7 +24,7 @@
 
 ## Architecture overview 🔧
 - Front-end: `index.html`, `app.js`, `styles.css` — UI, Leaflet map, SSE client, replay/streaming UI.
-- Back-end: `server.js` — static server + orchestration, NewsAPI fetcher, LM Studio client, SSE push.
+- Back-end: `server.js` — static server + orchestration, policy summarizer (LM Studio), SSE push.
 - Communication: Server‑Sent Events (`/api/stream`) for live updates; REST for control (`/api/next`, `/api/round/begin`, `/api/trigger`).
 - LLM integration: calls to LM Studio (`callLmStudio` and streaming `callLmStudioStream`) to run agent prompts.
 
@@ -38,9 +37,9 @@
   - loads India shapefile, renders states with Leaflet
   - UI: feed panel, deliberation panels, agent cards, round controls
   - connects to SSE `/api/stream`, reacts to events (agent, system, round_start, etc.)
-  - provides controls: Start Debate (`/api/next`) and round begin (`/api/round/begin`).
+  - provides controls: Begin Simulation (`/api/next`) and round begin (`/api/round/begin`).
 - `server.js` — server + orchestration:
-  - News fetching (`fetchNews`) using NewsAPI
+  - Policy summarization for user input using LM Studio
   - Council pipeline (`runCouncil`) implementing rounds 0–4
   - LLM prompt builders and streaming handlers
   - SSE endpoint `/api/stream` and REST endpoints
@@ -50,10 +49,10 @@
 
 ## Important server endpoints (quick reference)
 - GET `/api/stream` — Server‑Sent Events; UI subscribes to it.
-- POST `/api/next` — enqueue / fetch next news item and start council flow.
+- POST `/api/next` — summarize user policy input and start council flow.
 - POST `/api/round/begin` — user signals to begin a waiting round (used to step through rounds manually).
 - GET `/api/trigger?title=...` — manual story trigger for testing.
-- GET `/api/news` — returns the latest story object.
+- GET `/api/news` — returns the latest policy summary object.
 
 ---
 
@@ -78,7 +77,7 @@
 - Map: Leaflet renders India states from a remote shapefile; states are colored/animated depending on `positive` / `negative` impacts.
 - SSE events handled by `connectLiveStream()` in `app.js` include: `topic`, `feed`, `council_start`, `system`, `round_start`, `panel_selected`, `agent_start`, `agent_delta`, `agent_end`, `council_end`, etc.
 - UI controls:
-  - `Start Debate` (triggers `/api/next`)
+  - `Begin Simulation` (triggers `/api/next`)
   - Round begin buttons (POST `/api/round/begin`) to step rounds manually — these now appear only after the system messages for that round finish streaming
   - Feed cards and clickable story links
   - Rounds no longer auto-navigate: the UI will mark the `current` round but the user must click the round tab or use the `Go to current round` control to view it.
@@ -93,7 +92,6 @@
 ---
 
 ## Configuration & important env vars
-- NEWS_API_KEY — NewsAPI.org key (set in env) — required for fetching stories. Replace the placeholder in the code with your own key.
 - LMSTUDIO_URL — base URL for LM Studio (default: `http://127.0.0.1:1234`)
 - LMSTUDIO_API_KEY — optional API key for LM Studio
 - LM_MODEL — model identifier used by LM Studio (default in code: `qwen/qwen3-8b`)
@@ -110,7 +108,7 @@
 
 Set variables in your shell before `npm start`, e.g. (Windows PowerShell):
 
-$env:NEWS_API_KEY = "<your-key>"; npm start
+$env:LMSTUDIO_URL = "http://127.0.0.1:1234"; npm start
 
 ---
 
@@ -128,19 +126,18 @@ $env:NEWS_API_KEY = "<your-key>"; npm start
 
 ## How to test locally
 1. Ensure LM Studio (or compatible endpoint) is reachable and configured.
-2. Set `NEWS_API_KEY`.
+2. Ensure your LM Studio endpoint is running.
 3. Start server: `npm start`.
-4. Open UI and press `Start Debate`, or trigger a manual story: `/api/trigger?title=My+Test`.
+4. Open UI, enter policy details, and press `Begin Simulation`.
 5. Watch SSE events in browser DevTools Network or inspect console logs.
 
 ---
 
 ## Known limitations & suggested improvements 💡
 - No auth on server endpoints — add simple auth for exposed deployments.
-- NewsAPI key currently expected in env — add error message and fallback.
+- Add input validation and size limits for user-provided policy text.
 - Add unit/integration tests for prompt parsing and verdict fallback logic.
 - Harden parsing of LLM JSON outputs (more robust sanitization and fallback).
-- Rate‑limit NewsAPI calls and add caching of results.
 - Provide Dockerfile or compose to spin up LM Studio + app for reproducible dev environment.
 
 ---

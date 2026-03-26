@@ -158,6 +158,8 @@ const resizeObserver = new ResizeObserver(() => {
 resizeObserver.observe(mapContainer);
 
 const feedList = document.getElementById("feed-list");
+const feedBody = document.getElementById("feed-body");
+const feedEmpty = document.getElementById("feed-empty");
 const deliberationList = document.getElementById("deliberation-list");
 const layoutElement = document.querySelector(".layout");
 const topicText = document.getElementById("topic-text");
@@ -192,6 +194,28 @@ const analysisTimers = new Map();
 const pendingRoundTabTimers = new Map();
 // rounds where analysis start should be deferred until system streaming completes (special-case: 0→1)
 const analysisStartDeferred = new Set();
+
+const autoResizeTopicInput = () => {
+  if (!topicInput) {
+    return;
+  }
+  const maxHeight = 220;
+  topicInput.style.height = "auto";
+  const nextHeight = Math.min(topicInput.scrollHeight, maxHeight);
+  topicInput.style.height = `${nextHeight}px`;
+  topicInput.style.overflowY = topicInput.scrollHeight > maxHeight ? "auto" : "hidden";
+};
+
+const getFeedContainer = () => feedBody || feedList;
+
+const updateFeedEmptyState = () => {
+  if (!feedEmpty) {
+    return;
+  }
+  const container = getFeedContainer();
+  const hasCards = Boolean(container?.querySelector(".feed-card"));
+  feedEmpty.style.display = hasCards ? "none" : "flex";
+};
 
 const isSystemNotePipelineIdle = () => !systemNoteStreaming && systemNoteQueue.length === 0;
 
@@ -399,7 +423,7 @@ const setCompactMode = (enabled) => {
     layoutElement.classList.remove("feed-collapsed");
   }
   if (compactModeBtn) {
-    compactModeBtn.textContent = enabled ? "Switch to full mode" : "Swtich to compact mode";
+    compactModeBtn.textContent = enabled ? "Full View" : "Compact View";
   }
   setTimeout(() => {
     try {
@@ -418,7 +442,7 @@ const initCompactModeToggle = () => {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "status-item compact-mode-btn";
-  button.textContent = "Swtich to compact mode";
+  button.textContent = "Compact View";
   button.setAttribute("aria-label", "Switch to compact mode");
   button.addEventListener("click", () => {
     const enabled = layoutElement.classList.contains("compact-mode");
@@ -432,7 +456,7 @@ const initFeedCollapseToggle = () => {
   if (!feedList || !layoutElement || feedList.querySelector(".feed-collapse-btn")) {
     return;
   }
-  const controls = feedList.querySelector(".feed-controls");
+  const actions = document.getElementById("feed-actions");
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
   toggleBtn.className = "feed-collapse-btn";
@@ -442,8 +466,8 @@ const initFeedCollapseToggle = () => {
     const collapsed = layoutElement.classList.contains("feed-collapsed");
     setFeedCollapsed(!collapsed);
   });
-  if (controls) {
-    controls.appendChild(toggleBtn);
+  if (actions) {
+    actions.appendChild(toggleBtn);
   } else {
     feedList.appendChild(toggleBtn);
   }
@@ -465,7 +489,7 @@ const startDebateRunningIndicator = () => {
   let frame = 1;
   const render = () => {
     const dots = ".".repeat(frame);
-    fetchNextBtn.textContent = `Debate running${dots}`;
+    fetchNextBtn.textContent = `Simulation running${dots}`;
     frame = frame >= 3 ? 1 : frame + 1;
   };
   render();
@@ -485,7 +509,7 @@ const updateCouncilEmptyState = () => {
   councilOrchestratorCardEl.style.display = waitingVisible || (!hasMessages && !fetchLocked) ? "grid" : "none";
 };
 
-// Toggle UI lock state for debate: adds/removes `debate-locked` on <body>
+// Toggle UI lock state for simulation: adds/removes `debate-locked` on <body>
 const setDebateLocked = (locked) => {
   try {
     document.body.classList.toggle("debate-locked", Boolean(locked));
@@ -509,7 +533,7 @@ const setDebateLocked = (locked) => {
   updateCouncilEmptyState();
 };
 
-// Prevent clicks on topic text and start button while debate is locked
+// Prevent clicks on topic text and start button while simulation is locked
 document.addEventListener(
   "click",
   (e) => {
@@ -539,6 +563,9 @@ const scrollToTop = (element) => {
 
 initFeedCollapseToggle();
 initCompactModeToggle();
+updateFeedEmptyState();
+autoResizeTopicInput();
+topicInput?.addEventListener("input", autoResizeTopicInput);
 
 const ensureDeliberationPanels = () => {
   if (
@@ -638,7 +665,7 @@ const setActiveSystemRound = (roundId) => {
           speechList.appendChild(entry);
         }
         entry.classList.remove("loading");
-        entry.textContent = "The debate is finished";
+        entry.textContent = "The simulation is finished";
         councilOrchestratorCardEl.classList.remove("waiting");
         councilOrchestratorCardEl.classList.remove("muted");
         updateCouncilEmptyState();
@@ -652,8 +679,8 @@ const setActiveSystemRound = (roundId) => {
   if (!isVerdict && councilOrchestratorCardEl) {
     const speechList = councilOrchestratorCardEl.querySelector(".agent-speech-list");
     const entry = speechList?.querySelector(".agent-speech");
-    if (entry && entry.textContent === "The debate is finished") {
-      entry.textContent = "Begin a debate to see the council's responses.";
+    if (entry && entry.textContent === "The simulation is finished") {
+      entry.textContent = "Begin a simulation to see the council's responses.";
       entry.classList.remove("loading");
       updateCouncilEmptyState();
     }
@@ -931,7 +958,7 @@ const ensureAgentsContainer = () => {
   orchestrator.classList.add("council-orchestrator");
   orchestrator.classList.add("system");
   container.appendChild(orchestrator);
-  streamCardMessage(orchestrator, "Begin a debate to see the council's responses.", {
+  streamCardMessage(orchestrator, "Begin a simulation to see the council's responses.", {
     speed: 50,
   });
 
@@ -1052,7 +1079,7 @@ const setTopic = (title) => {
   if (!topicText) {
     return;
   }
-  topicText.textContent = `Current Topic: ${title}`;
+  topicText.textContent = title;
 };
 
 const formatMeta = (source, publishedAt) => {
@@ -1061,8 +1088,16 @@ const formatMeta = (source, publishedAt) => {
   return `${label} • ${time}`;
 };
 
+const getStorySummary = (story) => {
+  if (!story) {
+    return "Policy summary";
+  }
+  return story.summary || story.title || "Policy summary";
+};
+
 const clearActiveFeed = () => {
-  feedList.querySelectorAll(".feed-card.active").forEach((card) => {
+  const container = getFeedContainer();
+  container?.querySelectorAll(".feed-card.active").forEach((card) => {
     card.classList.remove("active");
     const badge = card.querySelector(".badge");
     if (badge) {
@@ -1082,32 +1117,13 @@ const addFeedCard = (story, isActive) => {
     <div class="feed-card__header">
       <span class="${badgeClass}">${badgeLabel}</span>
     </div>
-    <h3>${story.title}</h3>
+    <h3>${getStorySummary(story)}</h3>
     <p>${formatMeta(story.source, story.publishedAt)}</p>
   `;
 
-  if (story.url) {
-    card.style.cursor = "pointer";
-    card.addEventListener("click", () => {
-      window.open(story.url, "_blank", "noopener,noreferrer");
-    });
-  }
-
-  feedList.prepend(card);
-  return card;
-};
-
-const createWaitingCard = () => {
-  const card = document.createElement("div");
-  card.className = "feed-card active";
-  card.id = "active-feed-card";
-  card.innerHTML = `
-    <div class="feed-card__header">
-      <span class="badge">Active</span>
-    </div>
-    <h3>Waiting for news...</h3>
-    <p>System • now</p>
-  `;
+  const container = getFeedContainer();
+  container?.prepend(card);
+  updateFeedEmptyState();
   return card;
 };
 
@@ -1119,47 +1135,25 @@ const createActiveFeedCard = (story) => {
     <div class="feed-card__header">
       <span class="badge processing">Processing</span>
     </div>
-    <h3>${story.title}</h3>
+    <h3>${getStorySummary(story)}</h3>
     <p>${formatMeta(story.source, story.publishedAt)}</p>
   `;
   return card;
 };
 
-const insertWaitingCard = () => {
-  const card = createWaitingCard();
-  const controls = feedList.querySelector(".feed-controls");
-  if (controls && controls.nextSibling) {
-    feedList.insertBefore(card, controls.nextSibling);
-  } else {
-    feedList.appendChild(card);
-  }
-  return card;
-};
-
-const ensureWaitingCard = () => {
-  let current = document.getElementById("active-feed-card");
-  if (!current) {
-    current = insertWaitingCard();
-  }
-  return current;
-};
 
 const setActiveFeed = (story) => {
   let card = document.getElementById("active-feed-card");
   if (!card) {
     const activeCard = createActiveFeedCard(story);
-    const controls = feedList.querySelector(".feed-controls");
-    if (controls && controls.nextSibling) {
-      feedList.insertBefore(activeCard, controls.nextSibling);
-    } else {
-      feedList.appendChild(activeCard);
-    }
+    const container = getFeedContainer();
+    container?.prepend(activeCard);
     card = activeCard;
   }
   const header = card.querySelector("h3");
   const meta = card.querySelector("p");
   if (header) {
-    header.textContent = story.title;
+    header.textContent = getStorySummary(story);
   }
   if (meta) {
     meta.textContent = formatMeta(story.source, story.publishedAt);
@@ -1175,13 +1169,9 @@ const setActiveFeed = (story) => {
   card.classList.add("active", "processing");
   card.id = "active-feed-card";
   activeFeedCard = card;
+  updateFeedEmptyState();
 
-  if (story.url) {
-    card.style.cursor = "pointer";
-    card.onclick = () => {
-      window.open(story.url, "_blank", "noopener,noreferrer");
-    };
-  }
+  card.style.cursor = "default";
 };
 
 const setActiveState = (stateName) => {
@@ -1272,7 +1262,7 @@ const createBootingCard = () => {
     <div>
       <div class="agent-name">Council booting...</div>
       <div class="agent-speech-list">
-        <div class="agent-speech">Waiting for debate signal.</div>
+        <div class="agent-speech">Waiting for simulation signal.</div>
       </div>
     </div>
   `;
@@ -1802,7 +1792,7 @@ const clearDebateLoading = (payload) => {
   if (!message) {
     return;
   }
-  setSystemNoteLoading(debateLoadingNote, false, "Debate started.");
+  setSystemNoteLoading(debateLoadingNote, false, "Simulation started.");
   debateLoadingNote = null;
 };
 
@@ -1848,7 +1838,7 @@ const connectLiveStream = () => {
       councilHeaderEl.textContent = "Council's messages";
     }
     setRoundBeginControl(null);
-    debateLoadingNote = safeAddNote("Beginning the debate...", { loading: true });
+    debateLoadingNote = safeAddNote("Beginning the simulation...", { loading: true });
     // lock UI interactions while debate runs
     setDebateLocked(true);
   });
@@ -2067,7 +2057,7 @@ const connectLiveStream = () => {
       }
       activeFeedCard.classList.remove("active", "processing");
       activeFeedCard = null;
-      insertWaitingCard();
+      updateFeedEmptyState();
     }
     
     // Reset map styling then apply impacts (if any)
@@ -2088,7 +2078,7 @@ const connectLiveStream = () => {
     if (fetchNextBtn) {
       fetchNextBtn.disabled = false;
       fetchNextBtn.classList.remove("is-loading");
-      fetchNextBtn.textContent = "Start Debate";
+      fetchNextBtn.textContent = "Begin Simulation";
     }
   });
 
@@ -2112,29 +2102,28 @@ const connectLiveStream = () => {
 };
 
 if (fetchNextBtn) {
-  console.log("[BOOT] Start Debate button found, binding click handler");
+  console.log("[BOOT] Begin Simulation button found, binding click handler");
   fetchNextBtn.addEventListener("click", async () => {
-    console.log("[UI] Start Debate clicked, fetchLocked=", fetchLocked);
+    console.log("[UI] Begin Simulation clicked, fetchLocked=", fetchLocked);
     if (fetchLocked) {
+      return;
+    }
+    const query = topicInput?.value?.trim() || "";
+    if (!query) {
+      safeAddNote("Enter policy details to begin the simulation.");
       return;
     }
     fetchLocked = true;
     setDebateLocked(true);
     fetchNextBtn.disabled = true;
     fetchNextBtn.classList.add("is-loading");
-    fetchNextBtn.textContent = "Starting Debate";
+    fetchNextBtn.textContent = "Starting Simulation";
     stateLayer.eachLayer((layer) => {
       layer.getElement()?.classList.remove("active");
       layer.setStyle(baseStateStyle);
     });
     stateImpact.clear();
     try {
-      let query = topicInput?.value?.trim() || "";
-      if (!query) {
-        query = "Top headlines India";
-        safeAddNote("No topic provided — fetching top headlines for India...", { loading: true });
-      }
-      setTopic(query);
       await fetch("/api/next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2145,8 +2134,8 @@ if (fetchNextBtn) {
       setDebateLocked(false);
       fetchNextBtn.disabled = false;
       fetchNextBtn.classList.remove("is-loading");
-      fetchNextBtn.textContent = "Start Debate";
-      safeAddNote("Failed to fetch next news item.");
+      fetchNextBtn.textContent = "Begin Simulation";
+      safeAddNote("Failed to start simulation.");
     }
   });
 }

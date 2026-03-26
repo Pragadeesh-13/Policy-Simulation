@@ -6,9 +6,6 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 
 const PORT = Number(process.env.PORT || 3000);
-const NEWS_PROVIDER = "newsapi";
-const NEWS_API_KEY = process.env.NEWS_API_KEY || "b883c299ae464705b215df75a65147c1";
-const NEWS_QUERY = process.env.NEWS_QUERY || "";
 const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://100.72.48.67:1234";
 const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY || "";
 const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-14b";
@@ -98,13 +95,10 @@ const STATE_PROFILES = {
 
 const STATIC_ROOT = path.join(__dirname, "public");
 const clients = new Set();
-const recentStoryIds = [];
-const RECENT_LIMIT = 50;
 let latestStory = null;
 let councilRunning = false;
 let lastStatusMessage = "";
 let lastStatusAt = 0;
-const pendingStories = [];
 const pendingRoundBegins = new Set();
 const roundBeginWaiters = new Map();
 
@@ -346,102 +340,77 @@ const markRoundBegun = (round) => {
   return { ok: true, round: roundId };
 };
 
-const pickStoryId = (story) => story.url || `${story.title}-${story.publishedAt || ""}`;
-
-const normalizeStory = (raw) => ({
-  title: raw.title || "Untitled",
-  source: raw.source?.name || raw.source || "Unknown",
-  url: raw.url || "",
-  publishedAt: raw.publishedAt || raw.published_at || new Date().toISOString(),
-  description: raw.description || raw.content || "",
-});
-
-const fetchNews = async (queryOverride) => {
-  if (!NEWS_API_KEY) {
-    return [];
+const summarizePolicyText = async (text) => {
+  if (!text) {
+    return "Policy summary unavailable.";
   }
-
-  if (NEWS_PROVIDER !== "newsapi") {
-    throw new Error("Only NewsAPI is supported.");
-  }
-
-  const headers = { "X-Api-Key": NEWS_API_KEY };
-  const query = queryOverride?.trim() || "";
-
-  if (query) {
-    const url = new URL("https://newsapi.org/v2/everything");
-    url.searchParams.set("q", query);
-    url.searchParams.set("searchIn", "title,description");
-    url.searchParams.set("language", "en");
-    url.searchParams.set("pageSize", "5");
-    url.searchParams.set("sortBy", "publishedAt");
-    const response = await fetch(url, { headers });
-    if (response.ok) {
-      const payload = await response.json();
-      if (payload.status === "error") {
-        throw new Error(payload.message || "NewsAPI error");
-      }
-      const articles = (payload.articles || []).map(normalizeStory);
-      if (articles.length) {
-        notifyStatus(`NewsAPI: ${articles.length} matches for query.`);
-        return articles;
-      }
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are a policy summarizer. Return 1-2 concise sentences. " +
+        "The first sentence must start with 'The policy is about' and describe the core intent. " +
+        "If a second sentence is needed, add scope or key obligations. " +
+        "No bullets, no quotes, no preamble beyond the required opening.",
+    },
+    { role: "user", content: text },
+  ];
+  try {
+    const response = await callLmStudio(messages, 90);
+    const cleaned = sanitizeModelOutput(response) || "Policy summary unavailable.";
+    const sentences = cleaned.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentences.length >= 2) {
+      return `${sentences[0]} ${sentences[1]}`.trim();
     }
-
-    const fallbackUrl = new URL("https://newsapi.org/v2/top-headlines");
-    fallbackUrl.searchParams.set("q", query);
-    fallbackUrl.searchParams.set("country", "in");
-    fallbackUrl.searchParams.set("pageSize", "5");
-    const fallbackResponse = await fetch(fallbackUrl, { headers });
-    if (fallbackResponse.ok) {
-      const fallbackPayload = await fallbackResponse.json();
-      if (fallbackPayload.status === "error") {
-        throw new Error(fallbackPayload.message || "NewsAPI error");
-      }
-      const fallbackArticles = (fallbackPayload.articles || []).map(normalizeStory);
-      if (fallbackArticles.length) {
-        notifyStatus("NewsAPI: using top-headlines fallback.");
-        return fallbackArticles;
-      }
-    }
-
-    notifyStatus(`No results for query: ${query}`);
-    return [];
+    return sentences[0] || cleaned;
+  } catch (error) {
+    console.error("Policy summary failed:", error.message);
+    return "Policy summary unavailable.";
   }
-
-  const broadUrl = new URL("https://newsapi.org/v2/top-headlines");
-  broadUrl.searchParams.set("country", "in");
-  broadUrl.searchParams.set("pageSize", "5");
-  const broadResponse = await fetch(broadUrl, { headers });
-  if (!broadResponse.ok) {
-    throw new Error(`NewsAPI error: ${broadResponse.status}`);
-  }
-  const broadPayload = await broadResponse.json();
-  if (broadPayload.status === "error") {
-    throw new Error(broadPayload.message || "NewsAPI error");
-  }
-  const broadArticles = (broadPayload.articles || []).map(normalizeStory);
-  if (broadArticles.length) {
-    notifyStatus("NewsAPI: using top headlines for India.");
-  }
-  return broadArticles;
 };
 
-const rememberStory = (story) => {
-  const id = pickStoryId(story);
-  if (recentStoryIds.includes(id)) {
-    return false;
+const summarizePolicyTitle = async (text) => {
+  if (!text) {
+    return "Policy";
   }
-  recentStoryIds.unshift(id);
-  if (recentStoryIds.length > RECENT_LIMIT) {
-    recentStoryIds.pop();
-  }
-  return true;
-};
-
-const enqueueStory = (story) => {
-  if (rememberStory(story)) {
-    pendingStories.push(story);
+  const fallbackFromText = (value) => {
+    const cleaned = String(value || "").replace(/[#*_>`~\[\]\(\)\{\}"'\-]/g, " ");
+    const words = cleaned
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter(Boolean)
+      .filter((w) => !/^(the|a|an|and|or|of|to|in|for|on|with|by|as|is|are|be|this|that|these|those)$/i.test(w));
+    const picked = (words.length ? words : cleaned.split(/\s+/).filter(Boolean)).slice(0, 3);
+    if (!picked.length) {
+      return "Policy";
+    }
+    return picked
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(" ");
+  };
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You create short policy names. Provide a name for the policy and return ONLY 2-3 words, title case, no punctuation.",
+    },
+    { role: "user", content: text },
+  ];
+  try {
+    const response = await callLmStudio(messages, 20);
+    const cleaned = sanitizeModelOutput(response) || "Policy";
+    const words = cleaned.replace(/[^\w\s]/g, " ").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      return fallbackFromText(text);
+    }
+    const candidate = words.slice(0, 3).join(" ");
+    if (!candidate || /^policy$/i.test(candidate)) {
+      return fallbackFromText(text);
+    }
+    return candidate;
+  } catch (error) {
+    console.error("Policy title failed:", error.message);
+    return fallbackFromText(text);
   }
 };
 
@@ -1247,7 +1216,7 @@ const runCouncil = async (story) => {
   });
   sendEvent("system", {
     round: 2,
-    message: `Round 2: REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will debate.`,
+    message: `Round 2: REBUTTALS\n${rebuttalAgents.map((a) => a.state).join(" → ")} will simulate.`,
   });
   await waitForRoundBegin(2);
 
@@ -1324,39 +1293,28 @@ const runCouncil = async (story) => {
 };
 
 const serveNextStory = async (queryOverride) => {
-  const trimmedQuery = queryOverride?.trim() || "";
-  const hasQuery = Boolean(trimmedQuery);
-  if (hasQuery) {
-    pendingStories.length = 0;
+  const policyText = queryOverride?.trim() || "";
+  if (!policyText) {
+    notifyStatus("Enter policy details to begin the simulation.");
+    return false;
   }
 
-  if (!hasQuery && pendingStories.length) {
-    const story = pendingStories.shift();
-    latestStory = story;
-    sendEvent("topic", { title: story.title });
-    sendEvent("feed", story);
-    await runCouncil(story);
-    return true;
-  }
-  try {
-    const stories = await fetchNews(hasQuery ? trimmedQuery : NEWS_QUERY);
-    if (!stories.length) {
-      return false;
-    }
-    stories.forEach(enqueueStory);
-    if (pendingStories.length) {
-      const story = pendingStories.shift();
-      latestStory = story;
-      sendEvent("topic", { title: story.title });
-      sendEvent("feed", story);
-      await runCouncil(story);
-      return true;
-    }
-  } catch (error) {
-    console.error("News fetch failed:", error.message);
-    notifyStatus(`NewsAPI error: ${error.message}`);
-  }
-  return false;
+  const shortTitle = await summarizePolicyTitle(policyText);
+  sendEvent("topic", { title: shortTitle || "Policy" });
+  const summary = await summarizePolicyText(policyText);
+  const story = {
+    title: summary || "Policy summary",
+    source: "Agent summary",
+    url: "",
+    publishedAt: new Date().toISOString(),
+    description: policyText,
+    summary,
+  };
+
+  latestStory = story;
+  sendEvent("feed", story);
+  await runCouncil(story);
+  return true;
 };
 
 const readJsonBody = (req) =>
@@ -1417,7 +1375,7 @@ const server = http.createServer((req, res) => {
     res.write(
       `event: status\ndata: ${JSON.stringify({
         message: "Connected to council stream.",
-        provider: "newsapi",
+        provider: "policy",
         model: LM_MODEL,
         connection: "connected",
       })}\n\n`
