@@ -6,9 +6,12 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 
 const PORT = Number(process.env.PORT || 3000);
-const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://100.72.48.67:1234";
+const LMSTUDIO_URL = process.env.LMSTUDIO_URL || "http://127.0.0.1:1234";
 const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY || "";
-const LM_MODEL = process.env.LM_MODEL || "qwen/qwen3-14b";
+const LM_MODEL = process.env.LM_MODEL || "nvidia/nemotron-3-nano-4b";
+const LM_PROVIDER = process.env.LM_PROVIDER || "lmstudio";
+const LM_THINK = process.env.LM_THINK || "auto";
+const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 const LMSTUDIO_STREAM = process.env.LMSTUDIO_STREAM !== "false";
 const PANEL_SIZE = Math.max(2, Number(process.env.PANEL_SIZE || 5));
 const REBUTTAL_SIZE = Math.max(2, Number(process.env.REBUTTAL_SIZE || 3));
@@ -35,7 +38,7 @@ const STATE_PROFILES = {
     party: "DMK",
     ideology: "Dravidian, social justice, pro-industry",
     focus: "Manufacturing, IT exports, electronics",
-    stance: "Manufacturing Hawk. If the news promotes industrial growth, support it, even if the Centre proposes it, but demand 'State Autonomy' in implementation."
+    stance: "Manufacturing Hawk. If the policy promotes industrial growth, support it, even if the Centre proposes it, but demand 'State Autonomy' in implementation."
   },
   "Delhi": {
     party: "AAP",
@@ -465,7 +468,72 @@ const shuffle = (arr) => {
 
 const normalizeLmBase = (value) => value.replace(/\/v1\/?$/i, "");
 
+let ollamaClientPromise = null;
+const getOllamaClient = async () => {
+  if (!ollamaClientPromise) {
+    ollamaClientPromise = import("ollama").then((mod) => {
+      const client = mod.default || mod;
+      if (!client) {
+        throw new Error("Ollama client unavailable");
+      }
+      if (OLLAMA_HOST) {
+        process.env.OLLAMA_HOST = OLLAMA_HOST;
+      }
+      return client;
+    });
+  }
+  return ollamaClientPromise;
+};
+
+const isThinkingUnsupportedError = (error) => {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("does not support thinking") || message.includes("thinking is not supported");
+};
+
+const resolveThinkSetting = () => {
+  const normalized = String(LM_THINK || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") {
+    const model = String(LM_MODEL || "").toLowerCase();
+    if (model.includes("gpt-oss")) {
+      return "low";
+    }
+    if (/(qwen3|deepseek|r1)/i.test(model)) {
+      return true;
+    }
+    return undefined;
+  }
+  if (normalized === "true" || normalized === "false") {
+    return normalized === "true";
+  }
+  return normalized;
+};
+
 const callLmStudio = async (messages, maxTokens = 250) => {
+  const think = resolveThinkSetting();
+
+  if (LM_PROVIDER === "ollama") {
+    const client = await getOllamaClient();
+    try {
+      const response = await client.chat({
+        model: LM_MODEL,
+        messages,
+        stream: false,
+        ...(think !== undefined ? { think } : {}),
+      });
+      return response?.message?.content?.trim() || "";
+    } catch (error) {
+      if (think !== undefined && isThinkingUnsupportedError(error)) {
+        const response = await client.chat({
+          model: LM_MODEL,
+          messages,
+          stream: false,
+        });
+        return response?.message?.content?.trim() || "";
+      }
+      throw error;
+    }
+  }
+
   const headers = { "Content-Type": "application/json" };
   if (LMSTUDIO_API_KEY) {
     headers.Authorization = `Bearer ${LMSTUDIO_API_KEY}`;
@@ -480,6 +548,7 @@ const callLmStudio = async (messages, maxTokens = 250) => {
       messages,
       temperature: 0.7,
       max_tokens: maxTokens,
+      ...(think !== undefined ? { think } : {}),
     }),
   });
 
@@ -492,6 +561,45 @@ const callLmStudio = async (messages, maxTokens = 250) => {
 };
 
 const callLmStudioStream = async (messages, maxTokens, onDelta) => {
+  const think = resolveThinkSetting();
+
+  if (LM_PROVIDER === "ollama") {
+    const client = await getOllamaClient();
+    try {
+      const stream = await client.chat({
+        model: LM_MODEL,
+        messages,
+        stream: true,
+        ...(think !== undefined ? { think } : {}),
+      });
+
+      for await (const chunk of stream) {
+        const delta = chunk?.message?.content;
+        if (delta) {
+          onDelta(delta);
+        }
+      }
+      return;
+    } catch (error) {
+      if (think !== undefined && isThinkingUnsupportedError(error)) {
+        const stream = await client.chat({
+          model: LM_MODEL,
+          messages,
+          stream: true,
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk?.message?.content;
+          if (delta) {
+            onDelta(delta);
+          }
+        }
+        return;
+      }
+      throw error;
+    }
+  }
+
   const headers = { "Content-Type": "application/json" };
   if (LMSTUDIO_API_KEY) {
     headers.Authorization = `Bearer ${LMSTUDIO_API_KEY}`;
@@ -507,6 +615,7 @@ const callLmStudioStream = async (messages, maxTokens, onDelta) => {
       temperature: 0.7,
       max_tokens: maxTokens,
       stream: true,
+      ...(think !== undefined ? { think } : {}),
     }),
   });
 
@@ -703,8 +812,8 @@ const buildImpactPrompt = (agent, story) => {
       {
         role: "user",
         content:
-          `News: ${story.title}\n${story.description || "No summary."}\n\n` +
-          `How does this news specifically impact ${agent.state}'s economy?`,
+          `Policy: ${story.title}\n${story.description || "No summary."}\n\n` +
+          `How does this policy specifically impact ${agent.state}'s economy?`,
       },
     ],
     maxTokens: 120,
@@ -766,7 +875,7 @@ const buildOpeningPrompt = (agent, story, declarations, priorSpeeches) => {
       {
         role: "user",
         content:
-          `News: ${story.title}\n${story.description || "No summary."}\n\n` +
+          `Policy: ${story.title}\n${story.description || "No summary."}\n\n` +
           `Impact declarations from all states:\n${declarationText}\n` +
           `${priorText}\n` +
           `Deliver your opening statement. Reference at least one other state's declaration.`,
@@ -807,7 +916,7 @@ const buildRebuttalPrompt = (agent, story, fullTranscript, currentRoundSpeeches)
         role: "user",
         content:
           `Full transcript so far:\n${transcriptText}\n${currentText}\n` +
-          `Story: ${story.title}\n\n` +
+          `Policy: ${story.title}\n\n` +
           `Pick ONE opponent from the transcript. Quote their exact words. Explain why they're wrong.`,
       },
     ],
@@ -1108,7 +1217,7 @@ const runCouncil = async (story) => {
   sendEvent("round_start", { round: 0, label: "Impact Declarations", count: allAgents.length });
   sendEvent("system", {
     round: 0,
-    message: `Round 0: IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this news affects them.`,
+    message: `Round 0: IMPACT DECLARATIONS\nAll ${allAgents.length} states declare how this policy affects them.`,
   });
   await waitForRoundBegin(0);
 
@@ -1398,7 +1507,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (url.pathname === "/api/news") {
+  if (url.pathname === "/api/policy") {
     safeJson(res, 200, { story: latestStory });
     return;
   }

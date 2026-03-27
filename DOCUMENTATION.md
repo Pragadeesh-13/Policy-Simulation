@@ -52,7 +52,7 @@
 - POST `/api/next` — summarize user policy input and start council flow.
 - POST `/api/round/begin` — user signals to begin a waiting round (used to step through rounds manually).
 - GET `/api/trigger?title=...` — manual story trigger for testing.
-- GET `/api/news` — returns the latest policy summary object.
+- GET `/api/policy` — returns the latest policy summary object.
 
 ---
 
@@ -156,3 +156,32 @@ If you'd like, I can:
 3. Extract and document the prompt templates to separate files for easier editing. ✂️
 
 Tell me which of the follow‑ups you want next.
+
+---
+
+## Switch LLM provider (LM Studio ↔ Ollama)
+
+### Use LM Studio
+
+```zsh
+export LM_PROVIDER="lmstudio"
+export LMSTUDIO_URL="http://127.0.0.1:1234"
+export LM_MODEL="qwen3:4b"
+npm start
+```
+
+### Use Ollama (local)
+
+```zsh
+export LM_PROVIDER="ollama"
+export OLLAMA_HOST="http://127.0.0.1:11434"
+export LM_MODEL="qwen3:4b"
+npm start
+```
+
+### Toggle thinking
+
+```zsh
+export LM_THINK=auto   # auto | true | false | low | medium | high
+npm start
+```
