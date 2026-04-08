@@ -3,15 +3,12 @@
     return;
   }
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyDIwGeB4nnmpb2Ufhh8AMNvw0OKFYi67gQ",
-    authDomain: "llm-council-4da2d.firebaseapp.com",
-    projectId: "llm-council-4da2d",
-    storageBucket: "llm-council-4da2d.firebasestorage.app",
-    messagingSenderId: "21299434314",
-    appId: "1:21299434314:web:0509aec4e29bb60d8927b3",
-    measurementId: "G-MN70SJ7L0F",
-  };
+  const firebaseConfig = window.__FIREBASE_CONFIG__ || null;
+
+  if (!firebaseConfig?.apiKey) {
+    console.warn("[AUTH] Firebase web config missing. Set window.__FIREBASE_CONFIG__ before loading firebase-auth.js");
+    return;
+  }
 
   if (!window.firebase.apps.length) {
     window.firebase.initializeApp(firebaseConfig);

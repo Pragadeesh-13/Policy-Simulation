@@ -23,7 +23,7 @@ const DEFAULT_FIREBASE_CREDS_PATH = path.join(__dirname, "firebase_creds.json");
 const FIREBASE_SERVICE_ACCOUNT_PATH =
   process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
   (fs.existsSync(DEFAULT_FIREBASE_CREDS_PATH) ? DEFAULT_FIREBASE_CREDS_PATH : "");
-const FIREBASE_WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || "AIzaSyDIwGeB4nnmpb2Ufhh8AMNvw0OKFYi67gQ";
+const FIREBASE_WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || "";
 const FIREBASE_USERS_COLLECTION = process.env.FIREBASE_USERS_COLLECTION || "users";
 const COUNCIL_STATES = (
   process.env.COUNCIL_STATES ||

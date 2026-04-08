@@ -1,13 +1,14 @@
 {
+  "_comment": "Template only. Do not commit real credentials.",
   "type": "service_account",
-  "project_id": "llm-council-4da2d",
-  "private_key_id": "562e67a49904d0778bf4c20d3b120c858f48c714",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDTS/NRJiODqma1\nEv6wB7DMAhRsa5vt6B10MNlAZ8oGG4IlT6rX221ZfW3Zvb3VBBHspU7jdHTqQYTb\nCQnI91Ibt9lmD2FoUhGGkTZHPTGjBqCD9H/F74cI2Awnkl4whaJMN62UGVEwuc1h\nQG+S0wVP0fPGGAdxmxBf56Xch7H2KfBkUFYGKmOZpF2oiyxBPlZVBcoSLelmWIT3\njPgF0ehN7jb7+ObZP5xlZ5Lw+hjDpVkPlu16zyXSUbhnfqzDyNjn2WrpPnS3F8FV\nYIKp+31HSiWtsItY82qX6jV6BBQETm2RnmCUQpwK/oGLSKS2CoBtwQ0wduFkRmfW\nTYDb5QMHAgMBAAECggEAOrpv+RygH17z6B1M89FXZwSm95GbR+9NjHdtUvTmFnd7\n33H6ur9u78Ioj64ovrXAY6V4vUinnFq0mgqzkQuI41Jg1visasnwvBXNX9SW4Mid\nQb/p6bKPNjqSekc47cSe3Q9WrASzZ9ckygSWXllPryVcW7FfFEj0rqtckuSWZqQ0\n5nBaLbXYCri8PZervw22Rv99r93If2JG5f+dI2VfnxxrY12ecjbJkn+8KV8wPXDt\nH0kc9TXYhOzu0WaWyCWJiqPYTc6fkhYKiLBPwy86IX2c1+JHIHtaRKog4p01o4Rt\nK2kMcrGCzn9tKa87A0HCpb0pL/j8PlV4Kpg0WwGllQKBgQD5VGal53Qd77vpbTKz\naj6HI/Ifu+MYNVyicpEPpeJ4uozX/HVdilm3ovZPuid3ba3iHnO5Hr1NEkQKcwRa\nrKmewEqA7pG08C7ZzYXto1/rB488FwrQKPhFdhVlBMek+Q7e1j3Pdg2CAg/rUm4j\nxgkTyKDWMwxw8lCgFupzRZALLQKBgQDY8xIQOFibHi/HR3RO5INCKgvK5STqX6rW\ntAeMrCgkskcFGRBWsffZvLmlLs6dwdtK5NKsAOeG5zOQyc+wXGrntiMn7xhpR2dT\nPnryEfTYPBDOO4NDgdpKVvwfXhhKWlYG90WraNk+tzKnqVfMjEu+PD5pKSKe1TL8\nOzJ4Hs9XgwKBgAEH71C6T0mcZyuE7xO82btXU7X74emEtvhY/u6Qogobw19VROr5\nGnve6aPUwjsFMhXgSFw4m1HJRIzCgv8Y/a6RXv1/fwy/fYIbDnW4GjpvkpEOC1Zn\nBPfMkDQVu/mbqgsT2beU5mNmPMidU6VEOV9ikf+wwFlrNxgiYB/P5tOVAoGBAKxL\n3vyiwzvuLWPGi8hcEyJo4hSxBzBb6gG52IUP9JGwRFb4ING5ZW23RHi7Q7xmSRKh\nx+5yiW3KEFnc7OTTgNOlAyaj7G8wFg82f83gFOPmUDJ5cTYb2pFPo8wFnqTuOYQu\nvVX0XxQ/yir9go0gnsbmcWpzENuz1lobaWmcjm6hAoGAKygeVilf9xNkzMORNoLA\nOb21SLNabnyykXD51t7UtbGw8jn+JYND7fjvld+tETFWd2YxPOKrrUUzCOa49bh4\nDuesN+dEfUiXsL6lliy73qjD2cwCMrvGQlANPsthH1C+sBWinkWBV8xS9mXKMAKU\nkUlTNTQDgtE6PGLml2v9Tcc=\n-----END PRIVATE KEY-----\n",
-  "client_email": "firebase-adminsdk-fbsvc@llm-council-4da2d.iam.gserviceaccount.com",
-  "client_id": "109599031175322504745",
+  "project_id": "<your-project-id>",
+  "private_key_id": "<your-private-key-id>",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\n<your-private-key>\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "<your-service-account-email>",
+  "client_id": "<your-client-id>",
   "auth_uri": "https://accounts.google.com/o/oauth2/auth",
   "token_uri": "https://oauth2.googleapis.com/token",
   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40llm-council-4da2d.iam.gserviceaccount.com",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/<your-service-account-email-escaped>",
   "universe_domain": "googleapis.com"
 }
