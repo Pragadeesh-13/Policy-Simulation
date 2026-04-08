@@ -1,5 +1,5 @@
 {
-  "_comment": "Template only. Do not commit real credentials.",
+  "_comment": "Template only",
   "type": "service_account",
   "project_id": "<your-project-id>",
   "private_key_id": "<your-private-key-id>",
